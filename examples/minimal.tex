@@ -1,0 +1,20 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{braidtex}
+\begin{document}
+A compact inline braid: $f\circ\braid{\btin{x_1 x_2}\btcross{1}\btout{x_2 x_1}}\circ g$.
+
+A parenthesized three-strand braid with an axis, boundary points, and a strand annotation:
+\[
+  \psi(\alpha)=\braid[scale=0.9,axis=true,axiscolor=gray!60]{
+    \btin{(x_1 x_2) x_3}
+    \btcross{1}\btcross{-2}
+    \btout{x_1 (x_2 x_3)}
+    \btstrandcolor{1}{teal!75!black}
+    \btstrandcolor{2}{orange!85!black}
+    \btstrandcolor{3}{violet!75!black}
+    \btaxis\btpoint{2}{p}\btpointx{-0.5}{q}\btannot{1}{1}{\text{a}}
+  }.
+\]
+An identity braid: $\braid{\btid{3}\btin{x_1 x_2 x_3}\btout{x_1 x_2 x_3}}$.
+\end{document}

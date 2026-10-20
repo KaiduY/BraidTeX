@@ -1,0 +1,21 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{braidtex}[2026/10/20 BraidTeX v0.3.0 generated braid assets]
+\RequirePackage{tikz}
+\RequirePackage{xcolor}
+\providecommand{\braidasset}[1]{\input{#1}}
+\providecommand{\braid}[2][]{%
+  \PackageError{braidtex}{Unprocessed \string\braid expression}%
+    {Run `braidtex transform <file.tex>` or `braidtex build <file.tex>`.}%
+}
+\providecommand{\braidexpr}[2][]{%
+  \PackageError{braidtex}{Unprocessed \string\braidexpr expression}%
+    {Run `braidtex transform <file.tex>` or `braidtex build <file.tex>`.}%
+}
+\providecommand{\btbraid}[2][]{%
+  \PackageError{braidtex}{Unprocessed \string\btbraid expression}%
+    {Run `braidtex transform <file.tex>` or `braidtex build <file.tex>`.}%
+}
+\providecommand{\braiddefaults}[1]{%
+  \PackageError{braidtex}{Unprocessed \string\braiddefaults directive}%
+    {Run `braidtex transform <file.tex>` or `braidtex build <file.tex>`.}%
+}
