@@ -10,9 +10,12 @@ import re
 import tempfile
 
 from braidtex import Braid, RENDERER_VERSION
+from braidtex_model import CoordinateFrame, Separator
+from braidtex_operations import DiagramSum, stack as stack_diagrams
 from braidtex_parser import BraidSyntaxError, parse_braid_body, read_group, read_optional, split_options
 
-MARKER_RE = re.compile(r"\\(braidexpr|btbraid|braid)\b")
+MARKER_RE = re.compile(r"\\(btsubbraid|btalternatives|btstack|braidexpr|btbraid|braid)\b")
+BRAID_ONLY_RE = re.compile(r"\\(braidexpr|btbraid|braid)\b")
 PACKAGE_RE = re.compile(r"\\usepackage(?:\[[^]]*\])?\s*\{[^}]*\bbraidtex\b[^}]*\}")
 DEFAULTS_RE = re.compile(r"\\braiddefaults\b")
 INPUT_RE = re.compile(r"\\(input|include)\b")
@@ -84,6 +87,7 @@ def _is_comment_start(source: str, pos: int) -> bool:
 def _options_to_braid(parsed: Any) -> Braid:
     options = dict(parsed.options)
     explicit_axis = options.pop("axis", False)
+    explicit_frame = options.pop("frame", False)
     color_map = dict(parsed.strand_colors)
     color = options.pop("color", "black")
     show_inputs = options.pop("input_labels", True)
@@ -98,10 +102,17 @@ def _options_to_braid(parsed: Any) -> Braid:
         "axis": bool(explicit_axis) or parsed.axis,
         "boundary_points": parsed.boundary_points,
         "annotations": parsed.annotations,
+        "connectors": parsed.connectors,
+        "auxiliary_paths": parsed.auxiliary_paths,
+        "regions": parsed.regions,
+        "frame": (CoordinateFrame(**{
+            **parsed.frame_options,
+            "separators": tuple(Separator(**item) for item in parsed.separators),
+        }) if parsed.frame_enabled or explicit_frame else None),
     }
-    if show_inputs is False and parsed.input_tree is not None:
+    if show_inputs is False:
         kwargs["input_labels"] = [None] * parsed.n
-    if show_outputs is False and parsed.output_tree is not None:
+    if show_outputs is False:
         kwargs["output_labels"] = [None] * parsed.n
     # Friendly LaTeX-facing option spellings map to the existing Python API.
     rename = {
@@ -127,6 +138,181 @@ def _options_to_braid(parsed: Any) -> Braid:
     except (TypeError, ValueError) as exc:
         raise BraidSyntaxError(str(exc)) from exc
 
+
+
+def _parse_boolean(value: str, name: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered in {"true", "yes", "on", "1"}:
+        return True
+    if lowered in {"false", "no", "off", "0"}:
+        return False
+    raise BraidTransformError(f"Option {name!r} expects true or false")
+
+
+def _parse_one_braid_expression(text: str, defaults: Mapping[str, str] | None) -> tuple[Braid, dict[str, Any]]:
+    """Parse a single embedded \braid{...} expression, including its options."""
+    pos = 0
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+    match = BRAID_ONLY_RE.match(text, pos) if pos < len(text) else None
+    if not match:
+        raise BraidTransformError("Expected a \braid{...} expression")
+    command = match.group(1)
+    cursor = match.end()
+    options, cursor = read_optional(text, cursor)
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    if cursor >= len(text) or text[cursor] != "{":
+        raise BraidTransformError(f"\\{command} needs a braced body")
+    body, end = read_group(text, cursor)
+    if text[end:].strip():
+        raise BraidTransformError("Expected exactly one braid expression in the component")
+    parsed = parse_braid_body(body, options, default_options=defaults)
+    braid = _options_to_braid(parsed)
+    return braid, {"kind": "braid", "command": command, "braid": braid.to_dict()}
+
+
+def _parse_one_expression(text: str, defaults: Mapping[str, str] | None):
+    """Parse exactly one public expression, which may itself be composite."""
+    expressions = _extract_expressions(text)
+    if len(expressions) != 1:
+        raise BraidTransformError("Expected exactly one BraidTeX expression in this component")
+    start, end, body, options, command = expressions[0]
+    residue = list(_mask_comments(text))
+    for i in range(start, end):
+        if residue[i] not in "\r\n":
+            residue[i] = " "
+    if "".join(residue).strip():
+        raise BraidTransformError("Unexpected text outside a component expression")
+    return _build_expression(command, body, options, defaults)
+
+
+def _extract_inner_expressions(body: str) -> list[tuple[int, int, str, str | None, str | None]]:
+    expressions = _extract_expressions(body)
+    masked = list(_mask_comments(body))
+    for start, end, *_ in expressions:
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+    residue = "".join(masked)
+    residue = re.sub(r"\\btsep\b|\\btplus\b", "", residue)
+    if residue.strip():
+        raise BraidTransformError(
+            "Composite body may contain only braid expressions separated by optional \\btsep or \\btplus commands"
+        )
+    return expressions
+
+
+def _read_wrapped_component(body: str, wrapper: str) -> str:
+    """Extract one ``\btouter{...}`` or ``\btinner{...}`` and validate its wrapper grammar."""
+    pattern = re.compile(r"\\bt(outer|inner)\b")
+    found: list[tuple[str, int, int, str]] = []
+    pos = 0
+    while pos < len(body):
+        if _is_comment_start(body, pos):
+            pos = _skip_comment(body, pos)
+            continue
+        match = pattern.match(body, pos) if body[pos] == "\\" else None
+        if not match:
+            pos += 1
+            continue
+        command = "bt" + match.group(1)
+        cursor = match.end()
+        while cursor < len(body) and body[cursor].isspace():
+            cursor += 1
+        if cursor >= len(body) or body[cursor] != "{":
+            raise BraidTransformError(f"\\{command} expects one braced expression")
+        value, end = read_group(body, cursor)
+        found.append((command, pos, end, value))
+        pos = end
+    selected = [item for item in found if item[0] == wrapper]
+    if len(selected) != 1 or len(found) != 2:
+        raise BraidTransformError("Substitution must contain exactly one \btouter{...} and one \btinner{...}")
+    masked = list(_mask_comments(body))
+    for _command, start, end, _value in found:
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+    if "".join(masked).strip():
+        raise BraidTransformError("Unexpected text outside \btouter{...} and \btinner{...} blocks")
+    return selected[0][3]
+
+def _build_expression(command: str, body: str, outer_options: str | None,
+                      defaults: Mapping[str, str] | None):
+    """Build a Braid or DiagramSum and a canonical semantic specification."""
+    if command in {"braid", "braidexpr", "btbraid"}:
+        return _parse_one_braid_expression("\\" + command + ("[" + outer_options + "]" if outer_options else "") + "{" + body + "}", defaults)
+
+    opts = split_options(outer_options)
+    if command in {"btstack", "btalternatives"}:
+        children = _extract_inner_expressions(body)
+        if len(children) < 2:
+            raise BraidTransformError(f"\\{command} requires at least two braid expressions")
+        braids: list[Braid] = []
+        child_specs: list[dict[str, Any]] = []
+        for start, end, child_body, child_options, child_command in children:
+            child, child_spec = _build_expression(child_command, child_body, child_options, defaults)
+            braids.append(child)
+            child_specs.append(child_spec)
+        if command == "btstack":
+            allowed = {"separators", "labels", "check_labels"}
+            unknown = set(opts) - allowed
+            if unknown:
+                raise BraidTransformError("Unsupported stack option(s): " + ", ".join(sorted(unknown)))
+            separators = _parse_boolean(opts.get("separators", "true"), "separators")
+            check_labels = _parse_boolean(opts.get("check_labels", "true"), "check_labels")
+            raw_labels = opts.get("labels")
+            labels = None
+            if raw_labels is not None:
+                raw_labels = raw_labels.strip().strip("{}")
+                labels = [label.strip() or None for label in raw_labels.split("|")]
+            diagram = stack_diagrams(*braids, separators=separators, labels=labels, check_labels=check_labels)
+            return diagram, {"kind": "stack", "components": child_specs,
+                             "separators": separators, "labels": labels, "check_labels": check_labels}
+        operator = opts.get("operator", "+")
+        if set(opts) - {"operator"}:
+            raise BraidTransformError("Only operator=+ or operator=- is supported for \btalternatives")
+        terms: list[Braid] = []
+        term_signs: list[int] = []
+        for child_index, child in enumerate(braids):
+            outer_sign = 1 if operator == "+" or child_index == 0 else -1
+            if isinstance(child, Braid):
+                terms.append(child)
+                term_signs.append(outer_sign)
+            elif isinstance(child, DiagramSum):
+                terms.extend(child.terms)
+                term_signs.extend(outer_sign * sign for sign in child.signs)
+            else:
+                raise BraidTransformError("Unsupported term in \btalternatives")
+        diagram = DiagramSum(terms, operator=operator, signs=term_signs)
+        return diagram, {"kind": "sum", "operator": operator, "terms": child_specs}
+
+    if command == "btsubbraid":
+        unknown = set(opts) - {"position", "connector", "attachment"}
+        if unknown:
+            raise BraidTransformError("Unsupported substitution option(s): " + ", ".join(sorted(unknown)))
+        if "position" not in opts:
+            raise BraidTransformError("\\btsubbraid needs [position=<1-based input strand index>]")
+        try:
+            position = int(opts["position"])
+        except ValueError as exc:
+            raise BraidTransformError("Substitution position must be an integer") from exc
+        policy = opts.get("connector", opts.get("attachment", "error"))
+        if policy not in {"all", "error"}:
+            try:
+                policy = int(policy)
+            except ValueError as exc:
+                raise BraidTransformError("connector option must be 'error', 'all', or a replacement strand index") from exc
+        outer_text = _read_wrapped_component(body, "btouter")
+        inner_text = _read_wrapped_component(body, "btinner")
+        outer, outer_spec = _parse_one_expression(outer_text, defaults)
+        inner, inner_spec = _parse_one_expression(inner_text, defaults)
+        from braidtex_operations import substitute as substitute_diagram
+        diagram = substitute_diagram(outer, position, inner, connector_policy=policy)
+        return diagram, {"kind": "substitution", "position": position, "connector_policy": policy,
+                         "outer": outer_spec, "inner": inner_spec}
+
+    raise BraidTransformError(f"Unsupported composite expression \\{command}")
 
 def _mask_comments(source: str) -> str:
     """Replace comments with spaces while preserving offsets and newlines."""
@@ -315,12 +501,11 @@ def transform_source(
             defaults_index += 1
         line = source_text.count("\n", 0, start) + 1
         try:
-            parsed = parse_braid_body(body, outer_options, default_options=active_defaults)
-            braid = _options_to_braid(parsed)
+            diagram, model_spec = _build_expression(command, body, outer_options, active_defaults)
             spec = {
                 "renderer_version": RENDERER_VERSION,
-                "format": "inline-tikz-v1",
-                "braid": braid.to_dict(),
+                "format": "inline-tikz-v2-composable",
+                "model": model_spec,
             }
             canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
             normalized_spec = json.loads(canonical)
@@ -335,7 +520,7 @@ def transform_source(
                 except (OSError, ValueError):
                     valid_cache = False
             if not valid_cache:
-                tikz = braid.tikz(inline=True) + "\n"
+                tikz = diagram.tikz(inline=True) + "\n"
                 _atomic_write(asset_path, tikz)
                 metadata = {"key": digest, "spec": normalized_spec, "asset": asset_path.name}
                 _atomic_write(metadata_path, json.dumps(metadata, sort_keys=True, indent=2, ensure_ascii=False) + "\n")

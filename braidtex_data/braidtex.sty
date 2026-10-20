@@ -1,7 +1,8 @@
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesPackage{braidtex}[2026/10/20 BraidTeX v0.3.0 generated braid assets]
+\ProvidesPackage{braidtex}[2026/10/20 BraidTeX v0.6.0 generated braid assets]
 \RequirePackage{tikz}
 \RequirePackage{xcolor}
+\usetikzlibrary{decorations.pathreplacing}
 \providecommand{\braidasset}[1]{\input{#1}}
 \providecommand{\braid}[2][]{%
   \PackageError{braidtex}{Unprocessed \string\braid expression}%
@@ -18,4 +19,17 @@
 \providecommand{\braiddefaults}[1]{%
   \PackageError{braidtex}{Unprocessed \string\braiddefaults directive}%
     {Run `braidtex transform <file.tex>` or `braidtex build <file.tex>`.}%
+}
+
+\providecommand{\btstack}[2][]{%
+  \PackageError{braidtex}{Unprocessed \string\btstack expression}%
+    {Run `braidtex build <file.tex>` to preprocess composite diagrams.}%
+}
+\providecommand{\btalternatives}[2][]{%
+  \PackageError{braidtex}{Unprocessed \string\btalternatives expression}%
+    {Run `braidtex build <file.tex>` to preprocess composite diagrams.}%
+}
+\providecommand{\btsubbraid}[2][]{%
+  \PackageError{braidtex}{Unprocessed \string\btsubbraid expression}%
+    {Run `braidtex build <file.tex>` to preprocess composite diagrams.}%
 }

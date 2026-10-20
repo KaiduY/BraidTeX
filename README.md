@@ -1,4 +1,4 @@
-# BraidTeX 0.3
+# BraidTeX 0.6
 
 BraidTeX is a small Python authoring tool for writing braid diagrams as mathematical notation in LaTeX. It extends the original generator-word renderer with structural endpoint parsing, automatic hierarchical spacing, a source preprocessor, a LaTeX support package, deterministic vector TikZ assets, and a cache.
 
@@ -143,6 +143,8 @@ Short local options include:
 - `positive_over=left|right`
 - `input_labels=false`, `output_labels=false` (hide one endpoint label row while retaining its configuration and automatic layout)
 - `axis=true|false`, `axis_y=...`, `axis_extent=left:right`, `axis_color=...`, `axis_front=true|false`
+- `frame_top=true|false`, `frame_bottom=true|false`, `frame_left=true|false`, `frame_right=true|false`
+- `frame_axis_color=...`, `frame_axis_width=...`, `frame_boundary_style={...}`, `frame_boundary_width=...`, `frame_tick_half_height=...`
 
 Legacy compact spellings such as `strandsep`, `layerheight`, `linewidth`, and `axiscolor` are also accepted. Dimensions for endpoint spacing and heights are in centimetres; line widths and crossing gaps are in points. `scale` uniformly scales the TikZ picture. Parenthesization is inferred from configurations; there is no `layout=parenthesized` switch to remember.
 
@@ -229,24 +231,162 @@ python braidtex.py config.json --output braids/one.tikz --format inline
 
 Supported output formats for the Python API are `inline`, `picture`, and `standalone`.
 
-## 7. Testing
+
+
+## 7. Connectors, coordinate frames, and auxiliary paths
+
+These primitives are independent of the braid word unless noted otherwise:
+
+| Primitive | Meaning | Affects braid topology? |
+|---|---|---:|
+| `Connector(i, j, level=k)` / `\btconnector[options]{i}{j}{k}` | Horizontal segment attached to persistent strand identities `i` and `j`, at a generator boundary `k`; only the two endpoints get nodes. Intermediate strands are crossed visually without additional nodes. | No |
+| `CoordinateFrame(...)` / `\btframe` | Optional top/bottom axes, left arrow, dotted right boundary, and independently selected top/bottom ticks. | No |
+| `Separator(k, ticks=...)` / `\btsep[options]{k}` inside a braid | Dotted horizontal separator at level `k`, optionally with its own tick positions. | No |
+| `AuxiliaryPath(follow_strand=i, offset=...)` / `\btfollow{i}{offset}` | Dotted or dashed path that follows a persistent strand approximately. | No |
+| `AuxiliaryPath(points=..., style=...)` / `\btpath{...}{style}` | Explicit path in diagram coordinates. Coordinates are non-topological annotations. | No |
+| `Region(start, end, label)` / `\btregion{start}{end}{label}` | Vertical brace and label tied to generator levels. | No |
+
+Connector and separator commands accept optional local style options. For example, `\btconnector[color=red,nodes=false,line_width=1.1]{1}{4}{2}` hides the two endpoint nodes, while `\btsep[style={densely dotted},ticks={0.5,1.5}]{2}` adds a dotted separator with its own tick locations. The frame itself is independently configurable through the `frame_*` options described above; enable it with `\btframe` or `[frame=true]`.
+
+For example, a connector is attached to *identities*, not to the strands' current left-to-right positions:
+
+```latex
+\[
+  \braid{
+    \btin{a b c d}
+    \btcross{1}\btcross{2}\btcross{-1}
+    \btconnector{1}{4}{3}
+    \btframe
+    \btticks{top}{0,0.9,1.8,2.7}
+    \btsep{1}
+  }
+\]
+```
+
+The Python API supports independent style controls through `CoordinateFrame`, `Separator`, `Connector`, `AuxiliaryPath`, and `Region`. For example:
+
+```python
+from braidtex import Braid
+from braidtex_model import (
+    AuxiliaryPath, Connector, CoordinateFrame, Region, Separator,
+)
+
+b = Braid(
+    4, [1, 2, -1],
+    connectors=[Connector(1, 4, level=3, nodes=True)],
+    frame=CoordinateFrame(
+        top_ticks=(0, 0.9, 1.8, 2.7),
+        bottom_ticks=(0, 0.9, 1.8, 2.7),
+        separators=(Separator(1, ticks=(0.45, 1.35, 2.25)),),
+    ),
+    auxiliary_paths=[AuxiliaryPath(follow_strand=2, offset=0.14)],
+    regions=[Region(0, 1, r"u"), Region(1, 3, r"g", side="right")],
+)
+```
+
+A connector is an annotation, not a crossing generator. It does not participate in the induced permutation. Explicit `AuxiliaryPath.points` use the diagram's coordinate system and are intentionally not given strand identities; use `follow_strand` when it should be mapped by composition.
+
+## 8. Model-level stacking, strand replacement, and sums
+
+The Python operations work on `Braid` models, not rendered pictures:
+
+```python
+from braidtex import Braid
+from braidtex_model import Connector
+from braidtex_operations import DiagramSum, stack, substitute
+
+upper = Braid(3, [1, -2], connectors=[Connector(1, 3, level=2)])
+lower = Braid(3, [-1, 2, 1])
+combined = stack(upper, lower, separators=True, labels=(r"u", r"g"), check_labels=False)
+
+outer = Braid(2, [1], connectors=[Connector(1, 2, level=0)])
+inner = Braid(2, [-1])
+# This outer connector touches the replaced strand. Request one term for each
+# possible replacement-strand attachment rather than guessing a single target.
+alternatives = substitute(outer, 1, inner, connector_policy="all")
+assert isinstance(alternatives, DiagramSum) and len(alternatives) == 2
+```
+
+- `Braid.compose(below)` vertically composes two braid words, checks arity and any explicitly specified intermediate labels/parenthesizations, and remaps lower-component connector identities and levels through the upper braid's permutation.
+- `stack(*components, separators=True, labels=(...))` composes two or more components and can add dotted separators and named braces. It distributes over `DiagramSum` inputs, preserving term signs.
+- `substitute(outer, position, inner)` replaces a 1-based input strand by an `m`-strand braid. The arity becomes `n + m - 1`. The inner word is shifted into the bundle and outer generators are expanded by a **cabling** algorithm, preserving generator signs and the induced permutation.
+- If a connector, strand annotation, following auxiliary path, or boundary point is attached to the replaced outer strand, the default is an explicit error. Choose `connector_policy="all"` for separate alternatives, or pass an integer from `1` through the inserted arity to choose one replacement strand.
+- `DiagramSum([...], signs=[...])` represents a formal sum of distinct diagram models. Stacking and substitution distribute over the terms rather than joining drawings together.
+
+Composition does not geometrically overlay pre-rendered images. It concatenates/expands the mathematical braid word and remaps decorations against persistent identities. Component-boundary idle gaps and connector offsets are combined in the shared level coordinate system.
+
+### Matching operations in LaTeX
+
+Composite expressions use a small grammar and are compiled by the same `braidtex build` step as ordinary braids:
+
+```latex
+% Stack two components, add a dotted separator, and brace the regions.
+\[
+  \btstack[separators=true,labels={u|g},check_labels=false]{
+    \braid{\btin{a b c}\btcross{1}\btcross{-2}}
+    \btsep
+    \braid{\btin{a b c}\btcross{-1}\btcross{2}}
+  }
+\]
+
+% Replace input strand 1; expand the attached connector into alternatives.
+\[
+  \btsubbraid[position=1,connector=all]{
+    \btouter{\braid{\btin{a b}\btcross{1}\btconnector{1}{2}{0}}}
+    \btinner{\braid{\btin{x_1 x_2}\btcross{-1}}}
+  }
+\]
+
+% A formal diagram sum. The minus operator means first term minus later terms.
+\[
+  \btalternatives[operator=-]{
+    \braid{\btin{a b}\btcross{1}\btout{b a}}
+    \btplus
+    \braid{\btin{a b}\btcross{-1}\btout{b a}}
+  }
+\]
+```
+
+`\btstack` accepts `separators=true|false`, `labels={u|g|...}`, and `check_labels=true|false`. `\btsubbraid` accepts `position=<1-based index>` and `connector=error|all|<replacement index>`. `\btalternatives` accepts `operator=+|-`; the first term of a minus sum is positive and subsequent terms are negative. In a stack, `\btsep` separates adjacent component expressions; inside a single `\braid{...}`, `\btsep[style=...,ticks={...}]{k}` draws a styled separator at generator level `k`. `\btconnector` accepts `color`, `line_width`, `node_radius`, `nodes`, `visible`, `offset_down`, and `name` options. The frame axis flags (`frame_top`, `frame_bottom`, `frame_left`, `frame_right`) and frame styling options are active when the frame is enabled.
+
+The Python and TeX interfaces share the same model primitives and operation functions. TeX remains a small well-defined grammar, not a full TeX interpreter.
+
+## 9. Reproducible demonstrations
+
+The source for six reusable example families is in `examples/composition_gallery.py`. It constructs primitive models and model operations, then writes a vector TikZ gallery. Regenerate and compile it with:
+
+```bash
+python examples/composition_gallery.py
+cd examples
+pdflatex -interaction=nonstopmode -halt-on-error composition_gallery.tex
+```
+
+The gallery includes smooth shifts and exchanges, connectors with endpoint-only nodes, a tall stack with named regions, strand-replacement connector alternatives, four strands with three connectors and a dotted separator, and repeated crossings with auxiliary dotted trajectories. To test the source-transformer syntax end-to-end, use:
+
+```bash
+python braidtex_cli.py build examples/composition_notation.tex
+```
+
+This example demonstrates primitive commands, `\btstack`, `\btsubbraid`, and `\btalternatives`; generated TikZ assets are stored in the example project rather than in arbitrary system temporary locations.
+
+## 10. Testing
 
 Run the unit and integration suite:
 
 ```bash
-python -m unittest discover -s tests -v
+python -m pytest -q
 ```
 
-The suite currently contains 46 tests covering generator semantics, permutations, labels, structural parsing, inferred arity, invalid commands and indices, hierarchical layout, custom endpoint positions, composition (including annotations), axis/point output, source preservation, multiple markers, cache reuse/invalidation and cleanup. When `pdflatex` is available, integration tests compile real documents, including a multi-file project with spaces in both source and asset paths.
+The suite currently contains 77 tests covering generator semantics, permutations, labels, structural parsing, inferred arity, invalid commands and indices, hierarchical layout, custom endpoint positions, primitive geometry, configurable frame elements, styled connectors and separators, auxiliary paths, regions, stacking, substitution, connector alternatives, source preservation, cache reuse/invalidation and cleanup. When `pdflatex` is available, integration tests compile real documents, including composition syntax and a multi-file project with spaces in both source and asset paths.
 
 A representative compiled document is `examples/minimal.tex`; its PDF is generated by `braidtex build examples/minimal.tex`.
 
-## 8. Mathematical and parser conventions / limitations
+## 11. Mathematical and parser conventions / limitations
 
 - Positive and negative crossings use the documented left-over/right-over convention; this is a convention, not a universal choice across references.
 - Strand connectivity is determined by the Artin word. Label strings do not infer hidden crossings or reorder the braid.
 - The configuration parser is intentionally small, not a complete LaTeX parser. Structural parentheses are special; protect labels containing whitespace/parentheses in an extra pair of braces.
 - LaTeX color expressions and labels are emitted as TeX/TikZ content, so only use trusted document source; the preprocessor does not attempt TeX sanitization.
 - The axis is a horizontal reference line in the same diagram coordinate system. `\btpoint{i}{p}` aligns a point with top input port `i` at the configured axis height; it does not model a little disc's radius or the full geometry of an operadic configuration.
-- Automatic endpoint spacing is a deterministic hierarchical scheme, not a metric on little-disc configurations. It does not compute the little 2-discs operad's composition, GRT actions, braid relations, or isotopy simplification. `Braid.compose` composes braid words only.
+- Automatic endpoint spacing is a deterministic hierarchical scheme, not a metric on little-disc configurations. `stack` and `substitute` perform model-level braid-word composition and cabling, but they do not construct actual little 2-disc configurations, compute GRT actions, normalize arbitrary braid words using relations, or simplify isotopies.
 - The generated per-diagram format is cached TikZ vector source, rather than one PDF file per diagram. TikZ/PGF includes it as vector paths in the thesis PDF.

@@ -1,0 +1,47 @@
+\documentclass{article}
+\usepackage[margin=2cm]{geometry}
+\usepackage{amsmath}
+\usepackage{braidtex}
+\begin{document}
+\section*{Composable BraidTeX notation}
+
+A primitive diagram with a frame, connector, axis ticks, a region label, and a non-topological dotted path:
+\[
+  \braid[scale=0.9,frame_top=true,frame_bottom=true,frame_left=true,frame_right=true,frame_axis_color=black,frame_axis_width=0.8]{
+    \btin{a b c}
+    \btcross{1}\btcross{-2}
+    \btframe
+    \btticks{top}{0,0.9,1.8}
+    \btsep[style={densely dotted},line_width=0.45,ticks={0.45,1.35}]{1}
+    \btconnector[color=black,line_width=0.8,node_radius=0.045,nodes=true]{1}{3}{2}
+    \btpath{0.15:1.7;0.28:1.0;0.18:0.2}{densely dotted}
+    \btregion{0}{2}{u}
+  }
+\]
+
+Vertical stacking is a model-level operation. The separator is distinct from both crossings and horizontal connectors:
+\[
+  \btstack[separators=true,labels={u|g},check_labels=false]{
+    \braid{\btin{a b c}\btcross{1}\btcross{-2}\btframe}
+    \btsep
+    \braid{\btin{a b c}\btcross{-1}\btcross{2}\btconnector[color=black,line_width=0.8,node_radius=0.045,nodes=true]{1}{3}{2}\btframe}
+  }
+\]
+
+Operadic substitution replaces one selected input strand with an inserted braid. Since the outer connector touches that strand, \texttt{connector=all} requests separate attachment alternatives:
+\[
+  \btsubbraid[position=1,connector=all]{
+    \btouter{\braid{\btin{a b}\btcross{1}\btconnector{1}{2}{0}}}
+    \btinner{\braid{\btin{x_1 x_2}\btcross{-1}}}
+  }
+\]
+
+Formal diagram sums can be written independently and then composed with other expressions:
+\[
+  \btalternatives[operator=-]{
+    \braid{\btin{a b}\btcross{1}\btout{b a}}
+    \btplus
+    \braid{\btin{a b}\btcross{-1}\btout{b a}}
+  }.
+\]
+\end{document}

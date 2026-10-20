@@ -16,12 +16,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from braidtex_geometry import GeometryMixin
 from braidtex_layout import endpoint_positions as _tree_positions
+from braidtex_model import (AuxiliaryPath, Connector, CoordinateFrame, Region, Separator,
+                            coerce_auxiliary_path, coerce_connector, coerce_frame, coerce_region, coerce_separator)
 import argparse
 import json
 import math
 
-__all__ = ["Braid", "Group", "parenthesization_groups", "from_dict"]
-RENDERER_VERSION = "0.3.0"
+__all__ = ["Braid", "Group", "parenthesization_groups", "from_dict", "Connector", "CoordinateFrame", "Separator", "AuxiliaryPath", "Region"]
+RENDERER_VERSION = "0.6.0"
 
 
 @dataclass(frozen=True, order=True)
@@ -174,6 +176,8 @@ class Braid(GeometryMixin):
         label_mode: str = "math",
         strand_sep: float = 0.9,
         layer_height: float = 0.95,
+        layer_heights: Sequence[float] | None = None,
+        level_gaps: Sequence[float] | None = None,
         identity_height: float = 1.5,
         line_width: float = 1.15,
         crossing_gap: float = 0.85,
@@ -194,6 +198,10 @@ class Braid(GeometryMixin):
         axis_front: bool = False,
         boundary_points: Sequence[Mapping[str, Any] | Sequence[Any]] | None = None,
         annotations: Sequence[Mapping[str, Any] | Sequence[Any]] | None = None,
+        connectors: Sequence[Connector | Mapping[str, Any] | Sequence[Any]] | None = None,
+        frame: CoordinateFrame | Mapping[str, Any] | None = None,
+        auxiliary_paths: Sequence[AuxiliaryPath | Mapping[str, Any]] | None = None,
+        regions: Sequence[Region | Mapping[str, Any] | Sequence[Any]] | None = None,
     ) -> None:
         if not isinstance(n, int) or n < 1:
             raise ValueError("n must be a positive integer")
@@ -308,6 +316,45 @@ class Braid(GeometryMixin):
         self.axis_front = bool(axis_front)
         self.boundary_points = tuple(self._coerce_boundary_point(p) for p in (boundary_points or ()))
         self.annotations = tuple(self._coerce_annotation(a) for a in (annotations or ()))
+        if layer_heights is None:
+            self.layer_heights = tuple(self.layer_height for _ in self.word)
+        else:
+            values = tuple(float(v) for v in layer_heights)
+            if len(values) != len(self.word):
+                raise ValueError(f"layer_heights must have length len(word)={len(self.word)}")
+            if any(not math.isfinite(v) or v <= 0 for v in values):
+                raise ValueError("layer_heights must contain positive finite numbers")
+            self.layer_heights = values
+        if level_gaps is None:
+            self.level_gaps = (self.identity_height,) if not self.word else tuple(0.0 for _ in range(len(self.word) + 1))
+        else:
+            values = tuple(float(v) for v in level_gaps)
+            if len(values) != len(self.word) + 1:
+                raise ValueError(f"level_gaps must have length len(word)+1={len(self.word)+1}")
+            if any(not math.isfinite(v) or v < 0 for v in values):
+                raise ValueError("level_gaps must contain non-negative finite numbers")
+            self.level_gaps = values
+        self.connectors = tuple(coerce_connector(c) for c in (connectors or ()))
+        for connector in self.connectors:
+            if max(connector.strand_a, connector.strand_b) > self.n:
+                raise ValueError(f"Connector strands must be <= n={self.n}")
+            if connector.level > len(self.word):
+                raise ValueError(f"Connector level must be between 0 and {len(self.word)}")
+        self.frame = coerce_frame(frame)
+        if self.frame is not None:
+            for separator in self.frame.separators:
+                if separator.level > len(self.word):
+                    raise ValueError(f"Separator level must be between 0 and {len(self.word)}")
+        self.auxiliary_paths = tuple(coerce_auxiliary_path(p) for p in (auxiliary_paths or ()))
+        for path in self.auxiliary_paths:
+            if path.follow_strand is not None and path.follow_strand > self.n:
+                raise ValueError(f"Auxiliary path follow_strand must be <= n={self.n}")
+            if path.start_level > len(self.word) or (path.end_level is not None and path.end_level > len(self.word)):
+                raise ValueError(f"Auxiliary path levels must be between 0 and {len(self.word)}")
+        self.regions = tuple(coerce_region(r) for r in (regions or ()))
+        for region in self.regions:
+            if region.end_level > len(self.word):
+                raise ValueError(f"Region levels must be between 0 and {len(self.word)}")
         self._top_xs = self.top_positions or _tree_positions(self.top_parenthesization, self.n, self.strand_sep, self.cluster_gap)
         self._bottom_xs = self.bottom_positions or _tree_positions(self.bottom_parenthesization, self.n, self.strand_sep, self.cluster_gap)
         if len(self._top_xs) != self.n:
@@ -367,12 +414,26 @@ class Braid(GeometryMixin):
             raise ValueError("An annotation requires a label")
         item["label"] = str(item["label"])
         item["color"] = str(item.get("color") or self._strand_color(item["strand"] - 1))
+        offset_down = item.get("offset_down", 0.0)
+        if not isinstance(offset_down, (int, float)) or not math.isfinite(offset_down) or offset_down < 0:
+            raise ValueError("Annotation offset_down must be a finite non-negative number")
+        item["offset_down"] = float(offset_down)
         return item
+
+    @classmethod
+    def from_dict(cls, config: Mapping[str, Any]) -> "Braid":
+        """Build a Braid from its JSON-friendly serialized model."""
+        return from_dict(config)
 
     @property
     def permutation(self) -> tuple[int, ...]:
         """Input-strand identities at bottom positions, as 1-based indices."""
         return tuple(i + 1 for i in self._bottom_order)
+
+    def substitute(self, position: int, inner: "Braid", *, connector_policy: str | int = "error"):
+        """Operadically replace an input strand with an inner braid (1-based index)."""
+        from braidtex_operations import substitute
+        return substitute(self, position, inner, connector_policy=connector_policy)
 
     def compose(self, below: "Braid", *, check_labels: bool = True) -> "Braid":
         """Compose this braid vertically with ``below`` (this braid first).
@@ -383,6 +444,7 @@ class Braid(GeometryMixin):
         strands from the top braid; use a fresh ``strand_colors`` override on the
         result when a composed diagram should have a different palette.
         """
+        from braidtex_operations import replace_connector_level_and_identity, translate_auxiliary_path, map_lower_auxiliary_path, compose_frames
         if not isinstance(below, Braid):
             raise TypeError("below must be a Braid")
         if self.n != below.n:
@@ -409,6 +471,9 @@ class Braid(GeometryMixin):
             "include_root_parentheses": False,
             "strand_sep": self.strand_sep,
             "layer_height": self.layer_height,
+            "layer_heights": self.layer_heights + below.layer_heights,
+            "level_gaps": self.level_gaps[:len(self.word)] +
+                (self.level_gaps[len(self.word)] + below.level_gaps[0],) + below.level_gaps[1:],
             "identity_height": self.identity_height,
             "line_width": self.line_width,
             "crossing_gap": self.crossing_gap,
@@ -431,9 +496,36 @@ class Braid(GeometryMixin):
                     **annotation,
                     "strand": self._bottom_order[annotation["strand"] - 1] + 1,
                     "level": annotation["level"] + len(self.word),
+                    "offset_down": annotation.get("offset_down", 0.0) +
+                        (self.level_gaps[-1] if annotation["level"] == 0 else 0.0),
                 }
                 for annotation in below.annotations
             ],
+            "connectors": list(self.connectors) + [
+                replace_connector_level_and_identity(
+                    c, self._bottom_order, len(self.word), upper_trailing_gap=self.level_gaps[-1]
+                )
+                for c in below.connectors
+            ],
+            "auxiliary_paths": [
+                translate_auxiliary_path(c, sum(below.layer_heights) + sum(below.level_gaps))
+                for c in self.auxiliary_paths
+            ] + [
+                map_lower_auxiliary_path(c, self._bottom_order, len(self.word))
+                for c in below.auxiliary_paths
+            ],
+            "regions": list(self.regions) + [
+                Region(
+                    r.start_level + len(self.word), r.end_level + len(self.word), r.label,
+                    r.side, r.offset, r.color, r.line_width,
+                    r.start_offset + (self.level_gaps[-1] if r.start_level == 0 else 0.0),
+                    r.end_offset + (self.level_gaps[-1] if r.start_level == 0 and r.end_level == 0 else 0.0),
+                )
+                for r in below.regions
+            ],
+            "frame": compose_frames(
+                self.frame, below.frame, len(self.word), upper_trailing_gap=self.level_gaps[-1]
+            ),
         }
         # Preserve custom endpoint positions only when no corresponding tree
         # exists. If a lower diagram has explicit output labels, retain them.
@@ -473,6 +565,7 @@ class Braid(GeometryMixin):
         return (
             f"\\documentclass[tikz,border={border}]{{{document_class}}}\n"
             "\\usepackage{xcolor}\n"
+            "\\usetikzlibrary{decorations.pathreplacing}\n"
             "\\begin{document}\n"
             + self.tikz(inline=False)
             + "\n\\end{document}\n"
@@ -516,6 +609,8 @@ class Braid(GeometryMixin):
             "include_root_parentheses": self.include_root_parentheses,
             "strand_sep": self.strand_sep,
             "layer_height": self.layer_height,
+            "layer_heights": self.layer_heights,
+            "level_gaps": self.level_gaps,
             "identity_height": self.identity_height,
             "line_width": self.line_width,
             "crossing_gap": self.crossing_gap,
@@ -535,6 +630,13 @@ class Braid(GeometryMixin):
             "axis_front": self.axis_front,
             "boundary_points": list(self.boundary_points),
             "annotations": list(self.annotations),
+            "connectors": [c.__dict__ for c in self.connectors],
+            "frame": None if self.frame is None else {
+                **self.frame.__dict__,
+                "separators": [sep.__dict__ for sep in self.frame.separators],
+            },
+            "auxiliary_paths": [p.__dict__ for p in self.auxiliary_paths],
+            "regions": [r.__dict__ for r in self.regions],
         }
 
 
@@ -544,10 +646,10 @@ def from_dict(config: Mapping[str, Any]) -> Braid:
         "n", "word", "input_labels", "output_labels", "strand_colors", "color",
         "positive_over", "top_groups", "bottom_groups", "top_parenthesization",
         "bottom_parenthesization", "include_root_parentheses", "label_mode", "strand_sep",
-        "layer_height", "identity_height", "line_width", "crossing_gap", "background_color",
+        "layer_height", "layer_heights", "level_gaps", "identity_height", "line_width", "crossing_gap", "background_color",
         "endpoint_dots", "show_generators", "baseline", "group_spacing", "label_offset",
         "cluster_gap", "diagram_scale", "top_positions", "bottom_positions", "axis", "axis_y", "axis_extent",
-        "axis_color", "axis_front", "boundary_points", "annotations",
+        "axis_color", "axis_front", "boundary_points", "annotations", "connectors", "frame", "auxiliary_paths", "regions",
     }
     unexpected = set(config) - allowed
     if unexpected:

@@ -245,6 +245,12 @@ class ParsedBraid:
     identity_requested: bool = False
     boundary_points: list[dict[str, Any]] = field(default_factory=list)
     annotations: list[dict[str, Any]] = field(default_factory=list)
+    connectors: list[dict[str, Any]] = field(default_factory=list)
+    auxiliary_paths: list[dict[str, Any]] = field(default_factory=list)
+    regions: list[dict[str, Any]] = field(default_factory=list)
+    frame_enabled: bool = False
+    frame_options: dict[str, Any] = field(default_factory=dict)
+    separators: list[dict[str, Any]] = field(default_factory=list)
 
     def to_spec(self) -> dict[str, Any]:
         return {
@@ -257,6 +263,12 @@ class ParsedBraid:
             "axis": self.axis,
             "boundary_points": self.boundary_points,
             "annotations": self.annotations,
+            "connectors": self.connectors,
+            "auxiliary_paths": self.auxiliary_paths,
+            "regions": self.regions,
+            "frame_enabled": self.frame_enabled,
+            "frame_options": self.frame_options,
+            "separators": self.separators,
         }
 
 
@@ -279,10 +291,12 @@ def parse_braid_body(
         "cluster_gap", "cluster-gap", "group_spacing", "group-spacing", "axis", "axisy", "axis_y", "axis-y",
         "axisextent", "axis_extent", "axis-extent", "axiscolor", "axis_color", "axis-color",
         "axisfront", "axis_front", "axis-front", "dots", "endpoint_dots", "generators", "show_generators",
-        "inlabels", "outlabels", "input_labels", "output_labels",
+        "inlabels", "outlabels", "input_labels", "output_labels", "frame",
         "positiveover", "positive_over", "positive-over", "background", "background_color",
         "labeloffset", "label_offset", "label-offset", "baseline", "include-root-parentheses",
-        "include_root_parentheses",
+        "include_root_parentheses", "frame_top", "frame_bottom", "frame_left", "frame_right",
+        "frame_axis_color", "frame_axis_width", "frame_boundary_style", "frame_boundary_width",
+        "frame_tick_half_height",
     }
     unknown_opts = set(opts) - allowed_options
     if unknown_opts:
@@ -304,8 +318,24 @@ def parse_braid_body(
                 parsed.n = int(value)
             except ValueError as exc:
                 raise BraidSyntaxError(f"Option n expects a positive integer, got {value!r}") from exc
-        elif normalized in {"axis", "axis_front", "dots", "generators", "include_root_parentheses", "input_labels", "output_labels"}:
+        elif normalized in {"axis", "axis_front", "dots", "generators", "include_root_parentheses", "input_labels", "output_labels", "frame"}:
             parsed.options[normalized] = _parse_bool(key, value)
+            if normalized == "frame":
+                parsed.frame_enabled = parsed.options[normalized]
+        elif normalized in {"frame_top", "frame_bottom", "frame_left", "frame_right"}:
+            frame_name = {"frame_top": "top_axis", "frame_bottom": "bottom_axis",
+                          "frame_left": "left_axis", "frame_right": "right_boundary"}[normalized]
+            parsed.frame_options[frame_name] = _parse_bool(key, value)
+        elif normalized in {"frame_axis_color", "frame_boundary_style"}:
+            frame_name = {"frame_axis_color": "axis_color", "frame_boundary_style": "boundary_style"}[normalized]
+            parsed.frame_options[frame_name] = value.strip().strip("{}")
+        elif normalized in {"frame_axis_width", "frame_boundary_width", "frame_tick_half_height"}:
+            frame_name = {"frame_axis_width": "axis_width", "frame_boundary_width": "boundary_width",
+                          "frame_tick_half_height": "tick_half_height"}[normalized]
+            try:
+                parsed.frame_options[frame_name] = float(value.strip())
+            except ValueError as exc:
+                raise BraidSyntaxError(f"Option {key!r} expects a numeric value, got {value!r}") from exc
         elif normalized == "axis_extent":
             try:
                 left, right = value.strip("{}()[]").split(":", 1)
@@ -341,15 +371,24 @@ def parse_braid_body(
             raise BraidSyntaxError(f"Expected a BraidTeX command near body character {pos + 1}: {body[pos:pos+20]!r}")
         command = match.group(1)
         pos = match.end()
-        if command in {"btin", "btout", "btcross", "btid", "btcolor", "btstrandcolor", "btpoint", "btpointx", "btannot", "btaxis"}:
+        command_options = None
+        if command in {"btconnector", "btsep"}:
+            command_options, pos = read_optional(body, pos)
+        if command in {"btin", "btout", "btcross", "btid", "btcolor", "btstrandcolor", "btpoint", "btpointx", "btannot", "btaxis", "btframe", "btticks", "btsep", "btconnector", "btfollow", "btpath", "btregion"}:
             pass
         else:
-            raise BraidSyntaxError(f"Unsupported command \\{command} inside \\braid; supported commands are \\btin, \\btout, \\btcross, \\btid, \\btcolor, \\btstrandcolor, \\btaxis, \\btpoint, \\btpointx, and \\btannot")
+            raise BraidSyntaxError(
+                f"Unsupported command \\{command} inside \\braid; supported component commands include "
+                r"\btin, \btout, \btcross, \btid, \btstrandcolor, \btaxis, \btframe, \btticks, "
+                r"\btsep, \btconnector, \btfollow, \btpath, and \btregion"
+            )
 
         # Read a command's mandatory argument(s), with spaces permitted before them.
         args: list[str] = []
         needed = {"btin": 1, "btout": 1, "btcross": 1, "btid": 1, "btcolor": 1,
-                  "btstrandcolor": 2, "btpoint": 2, "btpointx": 2, "btannot": 3, "btaxis": 0}[command]
+                  "btstrandcolor": 2, "btpoint": 2, "btpointx": 2, "btannot": 3, "btaxis": 0,
+                  "btframe": 0, "btticks": 2, "btsep": 1, "btconnector": 3,
+                  "btfollow": 2, "btpath": 2, "btregion": 3}[command]
         for _ in range(needed):
             while pos < len(body) and body[pos].isspace():
                 pos += 1
@@ -357,8 +396,8 @@ def parse_braid_body(
                 raise BraidSyntaxError(f"Command \\{command} expects {needed} braced argument(s)")
             arg, pos = read_group(body, pos)
             args.append(arg)
-        if command in ("btin", "btout", "btaxis"):
-            key = {"btin": "input", "btout": "output", "btaxis": "axis"}[command]
+        if command in ("btin", "btout", "btaxis", "btframe"):
+            key = {"btin": "input", "btout": "output", "btaxis": "axis", "btframe": "frame"}[command]
             if key in seen_singletons:
                 raise BraidSyntaxError(f"Command \\{command} may only appear once")
             seen_singletons.add(key)
@@ -424,6 +463,100 @@ def parse_braid_body(
             if level < 0:
                 raise BraidSyntaxError("\\btannot level must be a non-negative crossing level")
             parsed.annotations.append({"strand": strand, "level": level, "label": args[2].strip()})
+        elif command == "btframe":
+            parsed.frame_enabled = True
+        elif command == "btticks":
+            side = args[0].strip().lower()
+            if side not in {"top", "bottom"}:
+                raise BraidSyntaxError(r"\btticks first argument must be 'top' or 'bottom'")
+            try:
+                ticks = tuple(float(x.strip()) for x in args[1].split(",") if x.strip())
+            except ValueError as exc:
+                raise BraidSyntaxError(r"\btticks expects comma-separated numeric x-coordinates") from exc
+            import math
+            if not all(math.isfinite(x) for x in ticks):
+                raise BraidSyntaxError(r"\btticks coordinates must be finite")
+            parsed.frame_options[f"{side}_ticks"] = ticks
+            parsed.frame_enabled = True
+        elif command == "btsep":
+            try:
+                level = int(args[0].strip())
+            except ValueError as exc:
+                raise BraidSyntaxError(r"\btsep expects a non-negative generator level") from exc
+            if level < 0:
+                raise BraidSyntaxError(r"\btsep level must be non-negative")
+            separator_options = split_options(command_options)
+            unknown = set(separator_options) - {"style", "line_width", "linewidth", "offset_down", "ticks"}
+            if unknown:
+                raise BraidSyntaxError("Unsupported \\btsep option(s): " + ", ".join(sorted(unknown)))
+            item: dict[str, Any] = {"level": level}
+            for key, value in separator_options.items():
+                key = {"linewidth": "line_width"}.get(key, key)
+                if key == "style":
+                    item[key] = value.strip().strip("{}")
+                elif key == "ticks":
+                    try:
+                        item[key] = tuple(float(x.strip()) for x in value.strip().strip("{}").split(",") if x.strip())
+                    except ValueError as exc:
+                        raise BraidSyntaxError(r"\btsep ticks must be comma-separated numbers") from exc
+                else:
+                    try:
+                        item[key] = float(value.strip())
+                    except ValueError as exc:
+                        raise BraidSyntaxError(f"\\btsep option {key} expects a number") from exc
+            parsed.separators.append(item)
+            parsed.frame_enabled = True
+        elif command == "btconnector":
+            try:
+                a, b, level = (int(x.strip()) for x in args)
+            except ValueError as exc:
+                raise BraidSyntaxError(r"\btconnector expects integer strand_a, strand_b, and level") from exc
+            connector_options = split_options(command_options)
+            unknown = set(connector_options) - {"color", "line_width", "linewidth", "node_radius", "nodes", "visible", "offset_down", "name"}
+            if unknown:
+                raise BraidSyntaxError("Unsupported \\btconnector option(s): " + ", ".join(sorted(unknown)))
+            item = {"strand_a": a, "strand_b": b, "level": level}
+            for key, value in connector_options.items():
+                key = {"linewidth": "line_width"}.get(key, key)
+                if key in {"nodes", "visible"}:
+                    item[key] = _parse_bool("btconnector " + key, value)
+                elif key in {"color", "name"}:
+                    item[key] = value.strip().strip("{}")
+                else:
+                    try:
+                        item[key] = float(value.strip())
+                    except ValueError as exc:
+                        raise BraidSyntaxError(f"\\btconnector option {key} expects a number") from exc
+            parsed.connectors.append(item)
+        elif command == "btfollow":
+            try:
+                strand, offset = int(args[0].strip()), float(args[1].strip())
+            except ValueError as exc:
+                raise BraidSyntaxError(r"\btfollow expects a strand index and numeric offset") from exc
+            parsed.auxiliary_paths.append({"follow_strand": strand, "offset": offset})
+        elif command == "btpath":
+            import math
+            points = []
+            try:
+                for point in args[0].split(";"):
+                    if not point.strip():
+                        continue
+                    x_text, y_text = point.split(":", 1)
+                    pair = (float(x_text.strip()), float(y_text.strip()))
+                    if not all(math.isfinite(x) for x in pair):
+                        raise ValueError("non-finite coordinate")
+                    points.append(pair)
+            except ValueError as exc:
+                raise BraidSyntaxError(r"\btpath points must use x:y;x:y;... finite coordinates") from exc
+            if len(points) < 2:
+                raise BraidSyntaxError(r"\btpath requires at least two points")
+            parsed.auxiliary_paths.append({"points": points, "style": args[1].strip() or "densely dotted"})
+        elif command == "btregion":
+            try:
+                start_level, end_level = int(args[0].strip()), int(args[1].strip())
+            except ValueError as exc:
+                raise BraidSyntaxError(r"\btregion expects integer start/end levels") from exc
+            parsed.regions.append({"start_level": start_level, "end_level": end_level, "label": args[2].strip()})
         n_commands += 1
 
     input_n = len(flatten_configuration(parsed.input_tree)) if parsed.input_tree is not None else None
@@ -458,4 +591,20 @@ def parse_braid_body(
             raise BraidSyntaxError(f"Annotation strand {annotation['strand']} exceeds strand count n={parsed.n}")
         if annotation["level"] > len(parsed.word):
             raise BraidSyntaxError(f"Annotation level {annotation['level']} exceeds {len(parsed.word)} crossing levels")
+    for connector in parsed.connectors:
+        if min(connector["strand_a"], connector["strand_b"]) < 1 or max(connector["strand_a"], connector["strand_b"]) > parsed.n:
+            raise BraidSyntaxError(f"Connector strands must be between 1 and n={parsed.n}")
+        if connector["strand_a"] == connector["strand_b"]:
+            raise BraidSyntaxError(r"\btconnector must refer to two distinct strands")
+        if connector["level"] < 0 or connector["level"] > len(parsed.word):
+            raise BraidSyntaxError(f"Connector level must be between 0 and {len(parsed.word)}")
+    for item in parsed.separators:
+        if item["level"] > len(parsed.word):
+            raise BraidSyntaxError(f"Separator level must be between 0 and {len(parsed.word)}")
+    for item in parsed.auxiliary_paths:
+        if item.get("follow_strand") is not None and not 1 <= item["follow_strand"] <= parsed.n:
+            raise BraidSyntaxError(f"Auxiliary path strand must be between 1 and n={parsed.n}")
+    for item in parsed.regions:
+        if not 0 <= item["start_level"] < item["end_level"] <= len(parsed.word):
+            raise BraidSyntaxError(f"Region levels must satisfy 0 <= start < end <= {len(parsed.word)}")
     return parsed

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "braidtex"
-version = "0.3.0"
+version = "0.6.0"
 description = "Mathematical braid notation, automatic layout, and cached TikZ preprocessing for LaTeX"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,7 +16,7 @@ dependencies = []
 braidtex = "braidtex_cli:main"
 
 [tool.setuptools]
-py-modules = ["braidtex", "braidtex_layout", "braidtex_geometry", "braidtex_parser", "braidtex_transform", "braidtex_cli"]
+py-modules = ["braidtex", "braidtex_model", "braidtex_operations", "braidtex_layout", "braidtex_geometry", "braidtex_parser", "braidtex_transform", "braidtex_cli"]
 packages = ["braidtex_data"]
 
 [tool.setuptools.package-data]
