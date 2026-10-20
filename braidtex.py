@@ -23,7 +23,7 @@ import json
 import math
 
 __all__ = ["Braid", "Group", "parenthesization_groups", "from_dict", "Connector", "CoordinateFrame", "Separator", "AuxiliaryPath", "Region"]
-RENDERER_VERSION = "0.6.0"
+RENDERER_VERSION = "0.7.0"
 
 
 @dataclass(frozen=True, order=True)
@@ -184,7 +184,7 @@ class Braid(GeometryMixin):
         background_color: str | None = "white",
         endpoint_dots: bool = False,
         show_generators: bool = False,
-        baseline: str = "(braid-base)",
+        baseline: str = "(braid-center)",
         group_spacing: float = 0.30,
         label_offset: float = 0.27,
         cluster_gap: float = 0.45,

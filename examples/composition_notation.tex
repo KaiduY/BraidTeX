@@ -11,9 +11,9 @@ A primitive diagram with a frame, connector, axis ticks, a region label, and a n
     \btin{a b c}
     \btcross{1}\btcross{-2}
     \btframe
-    \btticks{top}{0,0.9,1.8}
-    \btsep[style={densely dotted},line_width=0.45,ticks={0.45,1.35}]{1}
-    \btconnector[color=black,line_width=0.8,node_radius=0.045,nodes=true]{1}{3}{2}
+    \btticks{topports}{1,2,3}
+    \btsep[style={densely dotted},line_width=0.45,tick_ports={1,3}]{1}
+    \btconnector[color=black,line_width=0.8,node_radius=0.045,nodes=true,layer=back]{1}{3}{2}
     \btpath{0.15:1.7;0.28:1.0;0.18:0.2}{densely dotted}
     \btregion{0}{2}{u}
   }
@@ -24,7 +24,7 @@ Vertical stacking is a model-level operation. The separator is distinct from bot
   \btstack[separators=true,labels={u|g},check_labels=false]{
     \braid{\btin{a b c}\btcross{1}\btcross{-2}\btframe}
     \btsep
-    \braid{\btin{a b c}\btcross{-1}\btcross{2}\btconnector[color=black,line_width=0.8,node_radius=0.045,nodes=true]{1}{3}{2}\btframe}
+    \braid{\btin{a b c}\btcross{-1}\btcross{2}\btconnector[color=black,line_width=0.8,node_radius=0.045,nodes=true,layer=back]{1}{3}{2}\btframe}
   }
 \]
 

@@ -77,8 +77,59 @@ class GeometryMixin:
                 )
         return lines
 
+    @staticmethod
+    def _lerp_point(a: tuple[float, float], b: tuple[float, float], t: float) -> tuple[float, float]:
+        return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+
+    @classmethod
+    def _split_cubic(cls, points: Sequence[tuple[float, float]], t: float):
+        p0, p1, p2, p3 = points
+        p01 = cls._lerp_point(p0, p1, t)
+        p12 = cls._lerp_point(p1, p2, t)
+        p23 = cls._lerp_point(p2, p3, t)
+        p012 = cls._lerp_point(p01, p12, t)
+        p123 = cls._lerp_point(p12, p23, t)
+        p0123 = cls._lerp_point(p012, p123, t)
+        return (p0, p01, p012, p0123), (p0123, p123, p23, p3)
+
+    @classmethod
+    def _cubic_subsegment(cls, points: Sequence[tuple[float, float]], t0: float, t1: float):
+        """Return an exact cubic Bézier subcurve on the parameter interval [t0,t1]."""
+        if not (0.0 <= t0 < t1 <= 1.0):
+            raise ValueError("Bezier subsegment requires 0 <= t0 < t1 <= 1")
+        left, _ = cls._split_cubic(points, t1)
+        _, segment = cls._split_cubic(left, t0 / t1)
+        return segment
+
+    @staticmethod
+    def _curve_points(x0: float, x1: float, y0: float, y1: float, height: float):
+        """Crossing cubic with vertical endpoint tangents and a smooth lateral shift."""
+        bend = 0.285 * height
+        return (
+            (x0, y0),
+            (x0, y0 - bend),
+            (x1, y1 + bend),
+            (x1, y1),
+        )
+
+    @staticmethod
+    def _curve_tex(points: Sequence[tuple[float, float]], *, dx: float = 0.0) -> str:
+        p0, p1, p2, p3 = points
+        return (
+            f"({_tex_num(p0[0] + dx)},{_tex_num(p0[1])}) .. controls "
+            f"({_tex_num(p1[0] + dx)},{_tex_num(p1[1])}) and "
+            f"({_tex_num(p2[0] + dx)},{_tex_num(p2[1])}) .. "
+            f"({_tex_num(p3[0] + dx)},{_tex_num(p3[1])})"
+        )
+
     def _diagram_body(self) -> tuple[list[str], float, float]:
-        """Render the shared model as one coherent, deterministic TikZ picture."""
+        """Render coherent strand paths, then locally resolve their crossings.
+
+        Each input strand is emitted as one continuous TikZ path.  Crossing
+        knockouts are short exact Bézier subsegments of the overpassing path,
+        rather than white strokes along the entire crossing arc.  This keeps
+        neighboring strands intact and makes joins C1-smooth by construction.
+        """
         n, length = self.n, len(self.word)
         core_top = sum(self.layer_heights) + sum(self.level_gaps)
         core_bottom = 0.0
@@ -94,18 +145,48 @@ class GeometryMixin:
         min_x, max_x = min(all_xs), max(all_xs)
         axis_min, axis_max = self.axis_extent or (min_x - 0.35, max_x + 0.35)
         frame_left, frame_right = min_x - 0.35, max_x + 0.35
+        center_x = (min(top_xs[0], bottom_xs[0], lane_xs[0]) +
+                    max(top_xs[-1], bottom_xs[-1], lane_xs[-1])) / 2
         lines: list[str] = []
         front_axis: list[str] = []
-        center_x = (min(top_xs[0], bottom_xs[0], lane_xs[0]) + max(top_xs[-1], bottom_xs[-1], lane_xs[-1])) / 2
-        lines.append(f"\\coordinate (braid-base) at ({_tex_num(center_x)},{_tex_num(y_bottom)});")
 
-        # Generator levels are model coordinates, independent of the graphics.
-        # Each level_gap is a straight region before the next crossing (or after
-        # the final crossing), so identities can be stacked with crossing diagrams.
+        # Level k is the top of the straight gap before generator k+1.  The
+        # strand order is tracked by persistent input identity, never relabeled
+        # from a current left-to-right position.
         level_y = [core_top]
         for i in range(length):
             level_y.append(level_y[-1] - self.level_gaps[i] - self.layer_heights[i])
-        # level_y[-1] equals the trailing gap; the final straight section ends at 0.
+        orders_by_level = [list(range(n))]
+        order = list(range(n))
+        for generator in self.word:
+            idx = abs(generator) - 1
+            order[idx], order[idx + 1] = order[idx + 1], order[idx]
+            orders_by_level.append(order.copy())
+
+        top_levels = self._group_levels(self.top_groups)
+        bottom_levels = self._group_levels(self.bottom_groups)
+        top_label_extent = self.label_offset if self.input_labels is not None else 0.0
+        bottom_label_extent = self.label_offset if self.output_labels is not None else 0.0
+        top_group_start = y_top + (self.label_offset + 0.25 if self.input_labels is not None else 0.28)
+        bottom_group_start = y_bottom - (self.label_offset + 0.25 if self.output_labels is not None else 0.28)
+        if self.top_groups:
+            top_label_extent = max(
+                top_label_extent,
+                top_group_start - y_top + max(top_levels.values(), default=0) * self.group_spacing + 0.34,
+            )
+        if self.bottom_groups:
+            bottom_label_extent = max(
+                bottom_label_extent,
+                y_bottom - bottom_group_start + max(bottom_levels.values(), default=0) * self.group_spacing + 0.34,
+            )
+        visual_top = y_top + top_label_extent
+        visual_bottom = y_bottom - bottom_label_extent
+        if self.axis:
+            visual_top = max(visual_top, self.axis_y + 0.12)
+            visual_bottom = min(visual_bottom, self.axis_y - 0.12)
+        baseline_y = (visual_top + visual_bottom) / 2
+        lines.append(f"\\coordinate (braid-base) at ({_tex_num(center_x)},{_tex_num(y_bottom)});")
+        lines.append(f"\\coordinate (braid-center) at ({_tex_num(center_x)},{_tex_num(baseline_y)});")
 
         def axis_tex(destination: list[str]) -> None:
             if not self.axis:
@@ -152,177 +233,240 @@ class GeometryMixin:
                     f"\\draw[{frame.boundary_style},line width={_tex_num(frame.boundary_width)}pt] "
                     f"({_tex_num(frame_right)},{_tex_num(y_top)}) -- ({_tex_num(frame_right)},{_tex_num(y_bottom)});"
                 )
-            for x in frame.top_ticks:
+            top_tick_positions = list(frame.top_ticks)
+            bottom_tick_positions = list(frame.bottom_ticks)
+            for port in frame.top_tick_ports:
+                if port > n:
+                    raise ValueError(f"Top frame tick port {port} exceeds strand count n={n}")
+                top_tick_positions.append(top_xs[port - 1])
+            for port in frame.bottom_tick_ports:
+                if port > n:
+                    raise ValueError(f"Bottom frame tick port {port} exceeds strand count n={n}")
+                bottom_tick_positions.append(bottom_xs[port - 1])
+            for x in top_tick_positions:
                 out.append(f"\\draw[{style}] ({_tex_num(x)},{_tex_num(y_top-frame.tick_half_height)}) -- ({_tex_num(x)},{_tex_num(y_top+frame.tick_half_height)});")
-            for x in frame.bottom_ticks:
+            for x in bottom_tick_positions:
                 out.append(f"\\draw[{style}] ({_tex_num(x)},{_tex_num(y_bottom-frame.tick_half_height)}) -- ({_tex_num(x)},{_tex_num(y_bottom+frame.tick_half_height)});")
             for separator in frame.separators:
+                if separator.level > length:
+                    raise ValueError(f"Separator level {separator.level} exceeds braid level count {length}")
                 yy = level_y[separator.level] - separator.offset_down
                 out.append(
                     f"\\draw[{separator.style},line width={_tex_num(separator.line_width)}pt] "
                     f"({_tex_num(frame_left)},{_tex_num(yy)}) -- ({_tex_num(frame_right)},{_tex_num(yy)});"
                 )
-                for x in separator.ticks:
+                tick_positions = list(separator.ticks)
+                for port in separator.tick_ports:
+                    if port > n:
+                        raise ValueError(f"Separator tick port {port} exceeds strand count n={n}")
+                    tick_positions.append(lane_xs[port - 1])
+                for x in tick_positions:
                     out.append(
                         f"\\draw[draw={frame.axis_color},line width={_tex_num(frame.axis_width)}pt] "
                         f"({_tex_num(x)},{_tex_num(yy-frame.tick_half_height)}) -- ({_tex_num(x)},{_tex_num(yy+frame.tick_half_height)});"
                     )
             return out
 
-        # Draw coordinate frame/separators behind strands.
+        # Frame and axis are behind the actual braid.  An annotation connector's
+        # default layer is also behind strands, so an intersection is never
+        # mistaken for an additional braid crossing.  Endpoint nodes are redrawn
+        # after strands so that the connector's attachments remain visible.
         lines.extend(frame_tex())
         if not self.axis_front:
             axis_tex(lines)
 
-        # Smooth, order-preserving endpoint fans are independent of the braid word.
-        for pos in range(n):
-            x0, x1 = top_xs[pos], lane_xs[pos]
-            c1y = core_top + align_h * 0.62
-            c2y = core_top + align_h * 0.38
-            path = (
-                f"({_tex_num(x0)},{_tex_num(y_top)}) .. controls "
-                f"({_tex_num(x0)},{_tex_num(c1y)}) and ({_tex_num(x1)},{_tex_num(c2y)}) .. "
-                f"({_tex_num(x1)},{_tex_num(core_top)})"
-            )
-            lines.append(f"\\draw[draw={self._strand_color(pos)},line width={_tex_num(self.line_width)}pt] {path};")
-
-        # Track persistent input-strand identities at every generator boundary.
-        orders_by_level = [list(range(n))]
-        order = list(range(n))
-        for generator in self.word:
-            idx = abs(generator) - 1
-            order[idx], order[idx + 1] = order[idx + 1], order[idx]
-            orders_by_level.append(order.copy())
-
-        if length == 0:
-            # An identity strand can occupy a non-zero vertical component height.
-            for pos, strand_id in enumerate(order):
-                lines.append(
-                    f"\\draw[draw={self._strand_color(strand_id)},line width={_tex_num(self.line_width)}pt] "
-                    f"({_tex_num(lane_xs[pos])},{_tex_num(core_top)}) -- ({_tex_num(lane_xs[pos])},{_tex_num(core_bottom)});"
-                )
-        else:
-            for step, generator in enumerate(self.word):
-                yt = level_y[step] - self.level_gaps[step]
-                yb = level_y[step + 1]
-                height = self.layer_heights[step]
-                # The gap before this crossing is a straight vertical segment.
-                if self.level_gaps[step] > 0:
-                    for pos, strand_id in enumerate(orders_by_level[step]):
-                        lines.append(
-                            f"\\draw[draw={self._strand_color(strand_id)},line width={_tex_num(self.line_width)}pt] "
-                            f"({_tex_num(lane_xs[pos])},{_tex_num(level_y[step])}) -- ({_tex_num(lane_xs[pos])},{_tex_num(yt)});"
-                        )
-                i = abs(generator) - 1
-                left_id, right_id = orders_by_level[step][i], orders_by_level[step][i + 1]
-                for pos, strand_id in enumerate(orders_by_level[step]):
-                    if pos in (i, i + 1):
-                        continue
-                    lines.append(
-                        f"\\draw[draw={self._strand_color(strand_id)},line width={_tex_num(self.line_width)}pt] "
-                        f"({_tex_num(lane_xs[pos])},{_tex_num(yt)}) -- ({_tex_num(lane_xs[pos])},{_tex_num(yb)});"
-                    )
-
-                def curve(x_start: float, x_end: float) -> str:
-                    c1y = yt - height * 0.31
-                    c2y = yb + height * 0.31
-                    return (
-                        f"({_tex_num(x_start)},{_tex_num(yt)}) .. controls "
-                        f"({_tex_num(x_start)},{_tex_num(c1y)}) and ({_tex_num(x_end)},{_tex_num(c2y)}) .. "
-                        f"({_tex_num(x_end)},{_tex_num(yb)})"
-                    )
-
-                left_path = curve(lane_xs[i], lane_xs[i + 1])
-                right_path = curve(lane_xs[i + 1], lane_xs[i])
-                left_is_over = generator > 0 if self.positive_over == "left" else generator < 0
-                if left_is_over:
-                    over_id, under_id = left_id, right_id
-                    over_path, under_path = left_path, right_path
-                else:
-                    over_id, under_id = right_id, left_id
-                    over_path, under_path = right_path, left_path
-                lines.append(f"\\draw[draw={self._strand_color(under_id)},line width={_tex_num(self.line_width)}pt] {under_path};")
-                if self.background_color:
-                    halo_width = self.line_width + 2 * self.crossing_gap
-                    lines.append(f"\\draw[draw={self.background_color},line width={_tex_num(halo_width)}pt] {over_path};")
-                lines.append(f"\\draw[draw={self._strand_color(over_id)},line width={_tex_num(self.line_width)}pt] {over_path};")
-                if self.show_generators:
-                    sign = "" if generator > 0 else "^{-1}"
-                    lines.append(
-                        f"\\node[anchor=east,inner sep=1pt,font=\\scriptsize] at "
-                        f"({_tex_num(lane_xs[0] - 0.18)},{_tex_num((yt+yb)/2)}) {{$\\sigma_{{{i+1}}}{sign}$}};"
-                    )
-
-            # Straight gap below the last crossing (and identity padding for stacks).
-            if self.level_gaps[length] > 0:
-                for pos, strand_id in enumerate(orders_by_level[length]):
-                    lines.append(
-                        f"\\draw[draw={self._strand_color(strand_id)},line width={_tex_num(self.line_width)}pt] "
-                        f"({_tex_num(lane_xs[pos])},{_tex_num(level_y[length])}) -- ({_tex_num(lane_xs[pos])},{_tex_num(core_bottom)});"
-                    )
-
-        # Smooth fan from core lanes back to independently arranged output ports.
-        for pos, strand_id in enumerate(orders_by_level[-1]):
-            x0, x1 = lane_xs[pos], bottom_xs[pos]
-            c1y = core_bottom - align_h * 0.38
-            c2y = core_bottom - align_h * 0.62
-            path = (
-                f"({_tex_num(x0)},{_tex_num(core_bottom)}) .. controls "
-                f"({_tex_num(x0)},{_tex_num(c1y)}) and ({_tex_num(x1)},{_tex_num(c2y)}) .. "
-                f"({_tex_num(x1)},{_tex_num(y_bottom)})"
-            )
-            lines.append(f"\\draw[draw={self._strand_color(strand_id)},line width={_tex_num(self.line_width)}pt] {path};")
-
-        # Connectors are drawn as a distinct annotation layer; only their two
-        # named endpoint strands receive nodes, never the strands in between.
+        connector_data = []
         for connector in self.connectors:
             if not connector.visible:
                 continue
+            if connector.offset_down > self.level_gaps[connector.level] + 1e-8:
+                raise ValueError(
+                    f"Connector at level {connector.level} has offset_down={connector.offset_down:g}, "
+                    f"but the available straight gap is {self.level_gaps[connector.level]:g}; "
+                    "increase that level gap or move the connector to another level"
+                )
             order_at = orders_by_level[connector.level]
             pos_a = order_at.index(connector.strand_a - 1)
             pos_b = order_at.index(connector.strand_b - 1)
-            xa, xb, yy = lane_xs[pos_a], lane_xs[pos_b], level_y[connector.level] - connector.offset_down
+            xa, xb = lane_xs[pos_a], lane_xs[pos_b]
+            yy = level_y[connector.level] - connector.offset_down
+            connector_data.append((connector, xa, xb, yy))
+            if connector.layer == "back":
+                lines.append(
+                    f"\\draw[draw={connector.color},line width={_tex_num(connector.line_width)}pt] "
+                    f"({_tex_num(xa)},{_tex_num(yy)}) -- ({_tex_num(xb)},{_tex_num(yy)});"
+                )
+
+        # Geometry is shared across semantics: a segment list is built for each
+        # strand identity, then emitted as one continuous TikZ path.  This avoids
+        # independent arc joins and guarantees a vertical tangent at each port.
+        def add_line(segments, x: float, y: float) -> None:
+            segments.append(("line", (x, y)))
+
+        def add_curve(segments, cubic) -> None:
+            segments.append(("curve", tuple(cubic)))
+
+        strand_segments: dict[int, list[tuple[str, Any]]] = {sid: [] for sid in range(n)}
+        crossing_records = []
+        for step, generator in enumerate(self.word):
+            i = abs(generator) - 1
+            yt = level_y[step] - self.level_gaps[step]
+            yb = level_y[step + 1]
+            left_id, right_id = orders_by_level[step][i], orders_by_level[step][i + 1]
+            left_is_over = generator > 0 if self.positive_over == "left" else generator < 0
+            over_id = left_id if left_is_over else right_id
+            over_start = lane_xs[i] if left_is_over else lane_xs[i + 1]
+            over_end = lane_xs[i + 1] if left_is_over else lane_xs[i]
+            over_cubic = self._curve_points(over_start, over_end, yt, yb, self.layer_heights[step])
+            crossing_records.append((step, generator, over_id, over_cubic))
+
+        def add_segment_path(segments, start_x, start_y, *, x_offset: float = 0.0) -> str:
+            path = f"({_tex_num(start_x+x_offset)},{_tex_num(start_y)})"
+            for kind, data in segments:
+                if kind == "line":
+                    x, y = data
+                    path += f" -- ({_tex_num(x+x_offset)},{_tex_num(y)})"
+                else:
+                    p0, p1, p2, p3 = data
+                    path += (
+                        f" .. controls ({_tex_num(p1[0]+x_offset)},{_tex_num(p1[1])}) and "
+                        f"({_tex_num(p2[0]+x_offset)},{_tex_num(p2[1])}) .. "
+                        f"({_tex_num(p3[0]+x_offset)},{_tex_num(p3[1])})"
+                    )
+            return path
+
+        for strand_id in range(n):
+            segments = strand_segments[strand_id]
+            # Input fan: boundary point -> first lane, with vertical endpoint tangents.
+            x0, x1 = top_xs[strand_id], lane_xs[strand_id]
+            c1y = y_top - align_h * 0.38
+            c2y = core_top + align_h * 0.38
+            add_curve(segments, ((x0, y_top), (x0, c1y), (x1, c2y), (x1, core_top)))
+
+            if length == 0:
+                # Identity braid: its whole component is one continuous vertical segment.
+                add_line(segments, lane_xs[strand_id], core_bottom)
+            else:
+                for step, generator in enumerate(self.word):
+                    yt = level_y[step] - self.level_gaps[step]
+                    yb = level_y[step + 1]
+                    order_at = orders_by_level[step]
+                    position = order_at.index(strand_id)
+                    x_here = lane_xs[position]
+                    if self.level_gaps[step] > 1e-10:
+                        add_line(segments, x_here, yt)
+                    i = abs(generator) - 1
+                    left_id, right_id = order_at[i], order_at[i + 1]
+                    height = self.layer_heights[step]
+                    if strand_id == left_id:
+                        add_curve(segments, self._curve_points(lane_xs[i], lane_xs[i+1], yt, yb, height))
+                    elif strand_id == right_id:
+                        add_curve(segments, self._curve_points(lane_xs[i+1], lane_xs[i], yt, yb, height))
+                    else:
+                        add_line(segments, x_here, yb)
+                if self.level_gaps[length] > 1e-10:
+                    final_pos = orders_by_level[-1].index(strand_id)
+                    add_line(segments, lane_xs[final_pos], core_bottom)
+
+            # Output fan: final lane -> output port associated with this strand identity.
+            output_pos = orders_by_level[-1].index(strand_id)
+            x0, x1 = lane_xs[output_pos], bottom_xs[output_pos]
+            c1y = core_bottom - align_h * 0.38
+            c2y = y_bottom + align_h * 0.38
+            add_curve(segments, ((x0, core_bottom), (x0, c1y), (x1, c2y), (x1, y_bottom)))
+            path = add_segment_path(segments, top_xs[strand_id], y_top)
             lines.append(
-                f"\\draw[draw={connector.color},line width={_tex_num(connector.line_width)}pt] "
-                f"({_tex_num(xa)},{_tex_num(yy)}) -- ({_tex_num(xb)},{_tex_num(yy)});"
+                f"\\draw[draw={self._strand_color(strand_id)},line width={_tex_num(self.line_width)}pt," 
+                f"line cap=round,line join=round] {path};"
             )
+
+        # Resolve each crossing locally.  The knockout is only a short exact
+        # subcurve around t=1/2, so it masks the understrand at the intersection
+        # without whitening neighboring vertical pieces or other crossing layers.
+        for step, generator, over_id, over_cubic in crossing_records:
+            crossing_segment = self._cubic_subsegment(over_cubic, 0.482, 0.518)
+            if self.background_color:
+                halo_width = self.line_width + 2 * self.crossing_gap
+                halo = self._curve_tex(crossing_segment)
+                lines.append(
+                    f"\\draw[draw={self.background_color},line width={_tex_num(halo_width)}pt," 
+                    f"line cap=round,line join=round] {halo};"
+                )
+            over = self._curve_tex(crossing_segment)
+            lines.append(
+                f"\\draw[draw={self._strand_color(over_id)},line width={_tex_num(self.line_width)}pt," 
+                f"line cap=round,line join=round] {over};"
+            )
+            if self.show_generators:
+                i = abs(generator) - 1
+                sign = "" if generator > 0 else "^{-1}"
+                y_mid = (level_y[step] - self.level_gaps[step] + level_y[step + 1]) / 2
+                lines.append(
+                    f"\\node[anchor=east,inner sep=1pt,font=\\scriptsize] at "
+                    f"({_tex_num(lane_xs[0] - 0.18)},{_tex_num(y_mid)}) {{$\\sigma_{{{i+1}}}{sign}$}};"
+                )
+
+        # Connectors are explicit annotation lines, not braid crossings.  Back-layer
+        # lines were drawn underneath; front-layer lines are drawn after strands.
+        for connector, xa, xb, yy in connector_data:
+            if connector.layer == "front":
+                lines.append(
+                    f"\\draw[draw={connector.color},line width={_tex_num(connector.line_width)}pt] "
+                    f"({_tex_num(xa)},{_tex_num(yy)}) -- ({_tex_num(xb)},{_tex_num(yy)});"
+                )
+        for connector, xa, xb, yy in connector_data:
             if connector.nodes and connector.node_radius > 0:
                 for xx in (xa, xb):
                     lines.append(f"\\fill[draw={connector.color},fill={connector.color}] ({_tex_num(xx)},{_tex_num(yy)}) circle[radius={_tex_num(connector.node_radius)}];")
 
-        # Auxiliary trajectories are intentionally not part of the braid model.
+        # Auxiliary trajectories are non-topological annotations.  Following a
+        # strand now uses the exact strand segment model and translates it by the
+        # requested horizontal offset, rather than fitting a new smooth plot through
+        # just the generator endpoints (which could cut randomly through crossings).
         for auxiliary in self.auxiliary_paths:
             if not auxiliary.visible:
                 continue
             if auxiliary.points:
                 pts = list(auxiliary.points)
+                coordinates = " ".join(f"({_tex_num(x)},{_tex_num(y)})" for x, y in pts)
+                if len(pts) >= 3:
+                    path_code = f"plot[smooth] coordinates {{{coordinates}}}"
+                else:
+                    path_code = " -- ".join(f"({_tex_num(x)},{_tex_num(y)})" for x, y in pts)
             else:
                 sid = auxiliary.follow_strand - 1
                 end_level = length if auxiliary.end_level is None else auxiliary.end_level
-                pts = []
-                if auxiliary.start_level == 0:
-                    pts.append((top_xs[sid] + auxiliary.offset, y_top))
-                for lev in range(auxiliary.start_level, end_level + 1):
-                    pos = orders_by_level[lev].index(sid)
-                    pts.append((lane_xs[pos] + auxiliary.offset, level_y[lev]))
-                if end_level == length:
-                    pos = orders_by_level[-1].index(sid)
-                    pts.append((bottom_xs[pos] + auxiliary.offset, y_bottom))
-            coordinates = " ".join(f"({_tex_num(x)},{_tex_num(y)})" for x, y in pts)
-            if len(pts) >= 3:
-                path_code = f"plot[smooth] coordinates {{{coordinates}}}"
-            else:
-                path_code = " -- ".join(f"({_tex_num(x)},{_tex_num(y)})" for x, y in pts)
+                if auxiliary.start_level == 0 and end_level == length:
+                    # The strand's complete path is an exact parallel translation.
+                    path_code = add_segment_path(strand_segments[sid], top_xs[sid], y_top, x_offset=auxiliary.offset)
+                else:
+                    # Partial trajectories terminate at requested generator levels.
+                    pts = []
+                    if auxiliary.start_level == 0:
+                        pts.append((top_xs[sid] + auxiliary.offset, y_top))
+                    for lev in range(auxiliary.start_level, end_level + 1):
+                        pos = orders_by_level[lev].index(sid)
+                        pts.append((lane_xs[pos] + auxiliary.offset, level_y[lev]))
+                    if end_level == length:
+                        pos = orders_by_level[-1].index(sid)
+                        pts.append((bottom_xs[pos] + auxiliary.offset, y_bottom))
+                    coordinates = " ".join(f"({_tex_num(x)},{_tex_num(y)})" for x, y in pts)
+                    path_code = f"plot[smooth] coordinates {{{coordinates}}}" if len(pts) >= 3 else " -- ".join(f"({_tex_num(x)},{_tex_num(y)})" for x, y in pts)
             lines.append(
-                f"\\draw[draw={auxiliary.color},line width={_tex_num(auxiliary.line_width)}pt,{auxiliary.style}] {path_code};"
+                f"\\draw[draw={auxiliary.color},line width={_tex_num(auxiliary.line_width)}pt,{auxiliary.style},line cap=round,line join=round] {path_code};"
             )
 
-        # Region braces are tied to levels, so their location survives composition.
+        # Region braces are tied to the same level model, so their location survives
+        # stacking and substitution.  Side mirroring is explicit to keep both sides
+        # visually symmetric and keep the brace open towards the diagram.
         for region in self.regions:
             y0 = level_y[region.start_level] - region.start_offset
             y1 = level_y[region.end_level] - region.end_offset
             x_base = min_x - region.offset if region.side == "left" else max_x + region.offset
-            mirror = ",mirror" if region.side == "right" else ""
+            # TikZ's default brace on a top-to-bottom path bulges to the left.
+            # A left-hand brace must bulge right (toward the diagram), while a
+            # right-hand brace must bulge left; therefore only the left is mirrored.
+            mirror = "" if region.side == "right" else ",mirror"
             lines.append(
                 f"\\draw[decorate,decoration={{brace,amplitude=4pt{mirror}}},draw={region.color},line width={_tex_num(region.line_width)}pt] "
                 f"({_tex_num(x_base)},{_tex_num(y0)}) -- ({_tex_num(x_base)},{_tex_num(y1)});"
@@ -364,15 +508,11 @@ class GeometryMixin:
                 label = _tex_label(label_value, self.label_mode)
                 lines.append(f"\\node[inner sep=1pt,anchor=north] at ({_tex_num(bottom_xs[pos])},{_tex_num(y_bottom - self.label_offset)}) {{{label}}};")
 
-        top_start = y_top + (self.label_offset + 0.25 if self.input_labels is not None else 0.28)
-        bottom_start = y_bottom - (self.label_offset + 0.25 if self.output_labels is not None else 0.28)
-        top_levels = self._group_levels(self.top_groups)
-        bottom_levels = self._group_levels(self.bottom_groups)
         for group in self.top_groups:
-            y = top_start + top_levels[group] * self.group_spacing
+            y = top_group_start + top_levels[group] * self.group_spacing
             lines.extend(self._group_tex(group, y, True, top_levels[group], top_xs))
         for group in self.bottom_groups:
-            y = bottom_start - bottom_levels[group] * self.group_spacing
+            y = bottom_group_start - bottom_levels[group] * self.group_spacing
             lines.extend(self._group_tex(group, y, False, bottom_levels[group], bottom_xs))
 
         if self.axis_front:

@@ -4,7 +4,8 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Iterable, Sequence
 
-from braidtex import Braid
+from braidtex import Braid, Group
+from braidtex_layout import endpoint_positions
 from braidtex_model import (
     AuxiliaryPath, Connector, CoordinateFrame, Region, Separator,
 )
@@ -57,6 +58,7 @@ def compose_frames(upper: CoordinateFrame | None, lower: CoordinateFrame | None,
         left_axis=upper.left_axis or lower.left_axis,
         right_boundary=upper.right_boundary or lower.right_boundary,
         top_ticks=upper.top_ticks, bottom_ticks=lower.bottom_ticks,
+        top_tick_ports=upper.top_tick_ports, bottom_tick_ports=lower.bottom_tick_ports,
         axis_color=upper.axis_color, axis_width=max(upper.axis_width, lower.axis_width),
         tick_half_height=max(upper.tick_half_height, lower.tick_half_height),
         boundary_style=upper.boundary_style,
@@ -377,6 +379,52 @@ def _substitute_boundary_points(outer_points, inner_points, target: int, m: int,
     return tuple(result)
 
 
+
+def _groups_to_tree(leaves: Sequence, groups: Sequence[Group]):
+    """Build a nested configuration tree from non-crossing interval groups."""
+    n = len(leaves)
+    intervals = sorted(
+        {(int(g.start), int(g.end)) for g in groups},
+        key=lambda item: (item[0], -item[1]),
+    )
+
+    def build(start: int, end: int):
+        children = []
+        cursor = start
+        while cursor <= end:
+            candidates = [
+                (a, b) for a, b in intervals
+                if a == cursor and b <= end and not (a == start and b == end)
+            ]
+            if candidates:
+                # Choose the outermost interval starting here; nested intervals are
+                # rebuilt recursively inside it.
+                a, b = max(candidates, key=lambda pair: pair[1])
+                children.append(build(a, b))
+                cursor = b + 1
+            else:
+                children.append(leaves[cursor - 1])
+                cursor += 1
+        return tuple(children)
+
+    return build(1, n)
+
+
+def _expand_groups(groups: Sequence[Group], target: int, m: int) -> list[Group]:
+    """Map visual endpoint intervals through replacing one port by m ports."""
+    result = []
+    for group in groups:
+        if group.end < target:
+            start, end = group.start, group.end
+        elif group.start > target:
+            start, end = group.start + m - 1, group.end + m - 1
+        else:
+            start = group.start if group.start < target else target
+            end = group.end + m - 1 if group.end >= target else group.end
+        if start < end:
+            result.append(Group(start, end, group.label))
+    return result
+
 def _substitute_one(outer: Braid, target: int, inner: Braid,
                     replacement_index: int | None) -> Braid:
     m, n_new = inner.n, outer.n + inner.n - 1
@@ -387,36 +435,44 @@ def _substitute_one(outer: Braid, target: int, inner: Braid,
     word = tuple(inserted_word + cable_word)
     inserted_len = len(inserted_word)
 
-    # Boundary labels and structural trees are replaced independently at top/bottom.
-    # Only build a parenthesization tree when the user supplied structural
-    # grouping. Labels alone are not silently promoted to grouping nodes.
-    top_tree = None
-    if outer.top_parenthesization is not None or inner.top_parenthesization is not None:
-        inner_top = inner.top_parenthesization
-        if inner_top is None:
-            inner_top = tuple(inner.input_labels or (None,) * m)
-        outer_top_tree = outer.top_parenthesization
-        if outer_top_tree is None:
-            outer_top_tree = tuple(outer.input_labels or (None,) * outer.n)
-        top_tree = _replace_leaf(outer_top_tree, target, inner_top)
-
-    outer_target_output_port = outer._bottom_order.index(target - 1) + 1
-    bottom_tree = None
-    if outer.bottom_parenthesization is not None or inner.bottom_parenthesization is not None:
-        inner_bottom = inner.bottom_parenthesization
-        if inner_bottom is None:
-            inner_bottom = tuple(inner.output_labels or (None,) * m)
-        outer_bottom_tree = outer.bottom_parenthesization
-        if outer_bottom_tree is None:
-            outer_bottom_tree = tuple(outer.output_labels or (None,) * outer.n)
-        bottom_tree = _replace_leaf(outer_bottom_tree, outer_target_output_port, inner_bottom)
-
+    # Endpoint labels, semantic parenthesizations, and visual bundle layout are
+    # separate.  If either operand supplies an actual parenthesization tree, graft
+    # the inner configuration into that tree.  Otherwise we keep the mathematical
+    # object flat but use a nested layout tree plus an explicit grouping arc to make
+    # the inserted strand collection visible at both boundaries.
     top_replacement_labels = list(inner.input_labels) if inner.input_labels is not None else [None] * m
     top_labels = _expanded_endpoint_labels(outer.input_labels, target, top_replacement_labels, outer.n)
-    # Output labels are indexed by bottom positions. Place inner output ports in the
-    # bottom block occupied by the cabled target, preserving their explicit order.
+    inner_top = inner.top_parenthesization if inner.top_parenthesization is not None else tuple(top_replacement_labels)
+    outer_top_tree = outer.top_parenthesization if outer.top_parenthesization is not None else tuple(outer.input_labels or (None,) * outer.n)
+    top_tree = _replace_leaf(outer_top_tree, target, inner_top) if (
+        outer.top_parenthesization is not None or inner.top_parenthesization is not None
+    ) else None
+    top_layout_tree = _replace_leaf(
+        _groups_to_tree(tuple(outer.input_labels or (None,) * outer.n), outer.top_groups),
+        target, inner_top,
+    )
+
+    outer_target_output_port = outer._bottom_order.index(target - 1) + 1
     bottom_replacement_labels = list(inner.output_labels) if inner.output_labels is not None else [None] * m
     output_labels = _expanded_endpoint_labels(outer.output_labels, outer_target_output_port, bottom_replacement_labels, outer.n)
+    inner_bottom = inner.bottom_parenthesization if inner.bottom_parenthesization is not None else tuple(bottom_replacement_labels)
+    outer_bottom_tree = outer.bottom_parenthesization if outer.bottom_parenthesization is not None else tuple(outer.output_labels or (None,) * outer.n)
+    bottom_tree = _replace_leaf(outer_bottom_tree, outer_target_output_port, inner_bottom) if (
+        outer.bottom_parenthesization is not None or inner.bottom_parenthesization is not None
+    ) else None
+    bottom_layout_tree = _replace_leaf(
+        _groups_to_tree(tuple(outer.output_labels or (None,) * outer.n), outer.bottom_groups),
+        outer_target_output_port, inner_bottom,
+    )
+
+    top_groups = _expand_groups(outer.top_groups, target, m)
+    bottom_groups = _expand_groups(outer.bottom_groups, outer_target_output_port, m)
+    if top_tree is None and m > 1:
+        if not any((g.start, g.end) == (target, target + m - 1) for g in top_groups):
+            top_groups.append(Group(target, target + m - 1))
+    if bottom_tree is None and m > 1:
+        if not any((g.start, g.end) == (outer_target_output_port, outer_target_output_port + m - 1) for g in bottom_groups):
+            bottom_groups.append(Group(outer_target_output_port, outer_target_output_port + m - 1))
 
     # Colors of untouched strands are shifted; inserted strands inherit an explicit
     # inner color when supplied, otherwise the replaced outer strand's color.
@@ -539,6 +595,10 @@ def _substitute_one(outer: Braid, target: int, inner: Braid,
         "color": outer.color, "positive_over": outer.positive_over,
         "label_mode": outer.label_mode, "top_parenthesization": top_tree,
         "bottom_parenthesization": bottom_tree,
+        "top_groups": top_groups if top_tree is None else None,
+        "bottom_groups": bottom_groups if bottom_tree is None else None,
+        "top_positions": endpoint_positions(top_layout_tree, n_new, outer.strand_sep, outer.cluster_gap) if top_tree is None else None,
+        "bottom_positions": endpoint_positions(bottom_layout_tree, n_new, outer.strand_sep, outer.cluster_gap) if bottom_tree is None else None,
         "include_root_parentheses": False,
         "strand_sep": outer.strand_sep, "layer_height": outer.layer_height,
         "layer_heights": inner_heights + expanded_heights,

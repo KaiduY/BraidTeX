@@ -31,6 +31,20 @@ class PrimitiveModelTests(unittest.TestCase):
         self.assertFalse(braid.connectors[0].nodes)
         self.assertEqual(braid.connectors[0].line_width, 0.75)
 
+    def test_connector_default_is_background_layer_with_front_nodes(self):
+        braid = Braid(3, [], connectors=[Connector(1, 3, level=0)])
+        tex = braid.tikz(inline=False)
+        connector_line = tex.index("(0,1.5) -- (1.8,1.5)")
+        strand_paths = [tex.index("\\draw[draw=black,line width=1.15pt,line cap=round,line join=round]")]
+        self.assertLess(connector_line, strand_paths[0])
+        self.assertEqual(braid.connectors[0].layer, "back")
+
+    def test_port_based_separator_ticks_resolve_to_lane_positions(self):
+        frame = CoordinateFrame(separators=(Separator(1, tick_ports=(1, 3)),))
+        tex = Braid(3, [1], frame=frame).tikz(inline=False)
+        self.assertIn("(0,-", tex)
+        self.assertIn("(1.8,-", tex)
+
     def test_connector_uses_persistent_strand_identities(self):
         braid = Braid(3, [1], connectors=[Connector(1, 3, level=1)])
         tex = braid.tikz(inline=False)

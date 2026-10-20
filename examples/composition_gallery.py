@@ -35,7 +35,7 @@ shift_exchange = Braid(
     bottom_parenthesization=(r"x_2", (r"x_3", r"x_1")),
     strand_colors=("black", "black", "black"),
     layer_heights=(0.82, 1.05, 0.82),
-    frame=CoordinateFrame(top_ticks=(0.0, 0.9, 2.0), bottom_ticks=(0.0, 0.9, 2.0)),
+    frame=CoordinateFrame(top_tick_ports=(1, 2, 3), bottom_tick_ports=(1, 2, 3)),
 )
 save("01_shift_exchange", shift_exchange)
 
@@ -47,7 +47,7 @@ connector_simple = Braid(
     output_labels=(r"a", r"b", r"c", r"d"),
     identity_height=1.15,
     connectors=(Connector(1, 3, level=0, color="black", node_radius=0.045),),
-    frame=CoordinateFrame(top_ticks=(0.0, 0.9, 1.8, 2.7), bottom_ticks=(0.0, 0.9, 1.8, 2.7)),
+    frame=CoordinateFrame(top_tick_ports=(1, 2, 3, 4), bottom_tick_ports=(1, 2, 3, 4)),
 )
 save("02a_connector_simple", connector_simple)
 
@@ -61,7 +61,7 @@ connector_across = Braid(
     output_labels=(r"b", r"a", r"c", r"d"),
     connectors=(Connector(1, 4, level=3, color="black", node_radius=0.045),),
     layer_heights=(0.8, 0.85, 0.8),
-    frame=CoordinateFrame(top_ticks=(0.0, 0.9, 1.8, 2.7), bottom_ticks=(0.0, 0.9, 1.8, 2.7)),
+    frame=CoordinateFrame(top_tick_ports=(1, 2, 3, 4), bottom_tick_ports=(1, 2, 3, 4)),
 )
 save("02b_connector_across", connector_across)
 
@@ -86,7 +86,7 @@ outer = Braid(
     2, [1],
     input_labels=(r"a", r"b"), output_labels=(r"b", r"a"),
     connectors=(Connector(1, 2, level=0),),
-    frame=CoordinateFrame(top_ticks=(0.0, 0.9), bottom_ticks=(0.0, 0.9)),
+    frame=CoordinateFrame(top_tick_ports=(1, 2), bottom_tick_ports=(1, 2)),
 )
 inner = Braid(
     2, [-1],
@@ -101,9 +101,9 @@ save("04b_substitution_term_b", substitution_alternatives.terms[1])
 # 5. Four strands, three connectors, a dotted separator, independently ordered
 # input/output endpoint labels, frame ticks, and named vertical regions.
 frame_four = CoordinateFrame(
-    top_ticks=(0.0, 0.9, 1.8, 2.7),
-    bottom_ticks=(0.0, 0.9, 1.8, 2.7),
-    separators=(Separator(1, ticks=(0.45, 1.35, 2.25), style="densely dotted"),),
+    top_tick_ports=(1, 2, 3, 4),
+    bottom_tick_ports=(1, 2, 3, 4),
+    separators=(Separator(1, tick_ports=(1, 2, 3, 4), style="densely dotted"),),
 )
 four_connectors = Braid(
     4,
@@ -131,12 +131,9 @@ repeated_aux = Braid(
     auxiliary_paths=(
         AuxiliaryPath(follow_strand=1, offset=-0.17, style="densely dotted"),
         AuxiliaryPath(follow_strand=3, offset=0.17, style="densely dotted", color="gray!70"),
-        AuxiliaryPath(points=((0.16, 4.6), (0.26, 3.2), (0.18, 1.7), (0.24, 0.45)),
-                      style="dotted", color="gray!60", line_width=0.5),
     ),
     layer_heights=(0.76, 0.88, 0.76, 0.88, 0.76, 0.88),
-    frame=CoordinateFrame(top_axis=True, bottom_axis=True, left_axis=True, right_boundary=True,
-                          separators=(Separator(3, style="densely dotted"),)),
+    frame=CoordinateFrame(top_axis=True, bottom_axis=True, left_axis=True, right_boundary=True),
 )
 save("06_repeated_crossings_auxiliary", repeated_aux)
 

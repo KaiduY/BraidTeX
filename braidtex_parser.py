@@ -296,7 +296,7 @@ def parse_braid_body(
         "labeloffset", "label_offset", "label-offset", "baseline", "include-root-parentheses",
         "include_root_parentheses", "frame_top", "frame_bottom", "frame_left", "frame_right",
         "frame_axis_color", "frame_axis_width", "frame_boundary_style", "frame_boundary_width",
-        "frame_tick_half_height",
+        "frame_tick_half_height", "frame_top_tick_ports", "frame_bottom_tick_ports",
     }
     unknown_opts = set(opts) - allowed_options
     if unknown_opts:
@@ -336,6 +336,13 @@ def parse_braid_body(
                 parsed.frame_options[frame_name] = float(value.strip())
             except ValueError as exc:
                 raise BraidSyntaxError(f"Option {key!r} expects a numeric value, got {value!r}") from exc
+        elif normalized in {"frame_top_tick_ports", "frame_bottom_tick_ports"}:
+            frame_name = {"frame_top_tick_ports": "top_tick_ports",
+                          "frame_bottom_tick_ports": "bottom_tick_ports"}[normalized]
+            try:
+                parsed.frame_options[frame_name] = tuple(int(x.strip()) for x in value.strip().strip("{}[]").split(",") if x.strip())
+            except ValueError as exc:
+                raise BraidSyntaxError(f"Option {key!r} expects comma-separated 1-based port indices") from exc
         elif normalized == "axis_extent":
             try:
                 left, right = value.strip("{}()[]").split(":", 1)
@@ -467,16 +474,26 @@ def parse_braid_body(
             parsed.frame_enabled = True
         elif command == "btticks":
             side = args[0].strip().lower()
-            if side not in {"top", "bottom"}:
-                raise BraidSyntaxError(r"\btticks first argument must be 'top' or 'bottom'")
-            try:
-                ticks = tuple(float(x.strip()) for x in args[1].split(",") if x.strip())
-            except ValueError as exc:
-                raise BraidSyntaxError(r"\btticks expects comma-separated numeric x-coordinates") from exc
-            import math
-            if not all(math.isfinite(x) for x in ticks):
-                raise BraidSyntaxError(r"\btticks coordinates must be finite")
-            parsed.frame_options[f"{side}_ticks"] = ticks
+            if side not in {"top", "bottom", "topports", "bottomports"}:
+                raise BraidSyntaxError(r"\btticks first argument must be 'top', 'bottom', 'topports', or 'bottomports'")
+            if side.endswith("ports"):
+                try:
+                    ports = tuple(int(x.strip()) for x in args[1].split(",") if x.strip())
+                except ValueError as exc:
+                    raise BraidSyntaxError(r"\btticks port mode expects comma-separated 1-based integers") from exc
+                if any(port < 1 for port in ports):
+                    raise BraidSyntaxError(r"\btticks port indices must be positive")
+                key_name = "top_tick_ports" if side == "topports" else "bottom_tick_ports"
+                parsed.frame_options[key_name] = ports
+            else:
+                try:
+                    ticks = tuple(float(x.strip()) for x in args[1].split(",") if x.strip())
+                except ValueError as exc:
+                    raise BraidSyntaxError(r"\btticks expects comma-separated numeric x-coordinates") from exc
+                import math
+                if not all(math.isfinite(x) for x in ticks):
+                    raise BraidSyntaxError(r"\btticks coordinates must be finite")
+                parsed.frame_options[f"{side}_ticks"] = ticks
             parsed.frame_enabled = True
         elif command == "btsep":
             try:
@@ -486,7 +503,7 @@ def parse_braid_body(
             if level < 0:
                 raise BraidSyntaxError(r"\btsep level must be non-negative")
             separator_options = split_options(command_options)
-            unknown = set(separator_options) - {"style", "line_width", "linewidth", "offset_down", "ticks"}
+            unknown = set(separator_options) - {"style", "line_width", "linewidth", "offset_down", "ticks", "tick_ports"}
             if unknown:
                 raise BraidSyntaxError("Unsupported \\btsep option(s): " + ", ".join(sorted(unknown)))
             item: dict[str, Any] = {"level": level}
@@ -499,6 +516,14 @@ def parse_braid_body(
                         item[key] = tuple(float(x.strip()) for x in value.strip().strip("{}").split(",") if x.strip())
                     except ValueError as exc:
                         raise BraidSyntaxError(r"\btsep ticks must be comma-separated numbers") from exc
+                elif key == "tick_ports":
+                    try:
+                        ports = tuple(int(x.strip()) for x in value.strip().strip("{}").split(",") if x.strip())
+                    except ValueError as exc:
+                        raise BraidSyntaxError(r"\btsep tick_ports must be comma-separated 1-based integers") from exc
+                    if any(port < 1 for port in ports):
+                        raise BraidSyntaxError(r"\btsep tick_ports must be positive")
+                    item[key] = ports
                 else:
                     try:
                         item[key] = float(value.strip())
@@ -512,7 +537,7 @@ def parse_braid_body(
             except ValueError as exc:
                 raise BraidSyntaxError(r"\btconnector expects integer strand_a, strand_b, and level") from exc
             connector_options = split_options(command_options)
-            unknown = set(connector_options) - {"color", "line_width", "linewidth", "node_radius", "nodes", "visible", "offset_down", "name"}
+            unknown = set(connector_options) - {"color", "line_width", "linewidth", "node_radius", "nodes", "visible", "offset_down", "name", "layer"}
             if unknown:
                 raise BraidSyntaxError("Unsupported \\btconnector option(s): " + ", ".join(sorted(unknown)))
             item = {"strand_a": a, "strand_b": b, "level": level}
@@ -520,7 +545,7 @@ def parse_braid_body(
                 key = {"linewidth": "line_width"}.get(key, key)
                 if key in {"nodes", "visible"}:
                     item[key] = _parse_bool("btconnector " + key, value)
-                elif key in {"color", "name"}:
+                elif key in {"color", "name", "layer"}:
                     item[key] = value.strip().strip("{}")
                 else:
                     try:

@@ -21,19 +21,30 @@ def _finite_positive(value: float, name: str, *, allow_zero: bool = False) -> fl
 
 @dataclass(frozen=True)
 class Separator:
-    """A dotted/solid horizontal separator at a generator level."""
+    """A horizontal separator at a generator boundary.
+
+    ``ticks`` are absolute x-coordinates. ``tick_ports`` instead select 1-based
+    left-to-right ports at this level, so they follow the automatic layout.
+    The two representations may not be mixed in one separator.
+    """
     level: int
     ticks: tuple[float, ...] = ()
     style: str = "densely dotted"
     line_width: float = 0.45
     offset_down: float = 0.0
+    tick_ports: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.level, int) or self.level < 0:
             raise ValueError("Separator level must be a non-negative integer")
         object.__setattr__(self, "ticks", tuple(float(x) for x in self.ticks))
+        object.__setattr__(self, "tick_ports", tuple(int(x) for x in self.tick_ports))
         if not all(math.isfinite(x) for x in self.ticks):
             raise ValueError("Separator ticks must be finite coordinates")
+        if self.ticks and self.tick_ports:
+            raise ValueError("Use separator ticks or tick_ports, not both")
+        if any(port < 1 for port in self.tick_ports):
+            raise ValueError("Separator tick_ports are 1-based positive positions")
         object.__setattr__(self, "line_width", _finite_positive(self.line_width, "separator line_width"))
         object.__setattr__(self, "offset_down", _finite_positive(self.offset_down, "separator offset_down", allow_zero=True))
 
@@ -51,6 +62,8 @@ class CoordinateFrame:
     right_boundary: bool = True
     top_ticks: tuple[float, ...] = ()
     bottom_ticks: tuple[float, ...] = ()
+    top_tick_ports: tuple[int, ...] = ()
+    bottom_tick_ports: tuple[int, ...] = ()
     axis_color: str = "black"
     axis_width: float = 0.8
     tick_half_height: float = 0.09
@@ -61,9 +74,17 @@ class CoordinateFrame:
     def __post_init__(self) -> None:
         object.__setattr__(self, "top_ticks", tuple(float(x) for x in self.top_ticks))
         object.__setattr__(self, "bottom_ticks", tuple(float(x) for x in self.bottom_ticks))
+        object.__setattr__(self, "top_tick_ports", tuple(int(x) for x in self.top_tick_ports))
+        object.__setattr__(self, "bottom_tick_ports", tuple(int(x) for x in self.bottom_tick_ports))
         for name in ("top_ticks", "bottom_ticks"):
             if not all(math.isfinite(x) for x in getattr(self, name)):
                 raise ValueError(f"{name} must contain finite coordinates")
+        if self.top_ticks and self.top_tick_ports:
+            raise ValueError("Use top_ticks or top_tick_ports, not both")
+        if self.bottom_ticks and self.bottom_tick_ports:
+            raise ValueError("Use bottom_ticks or bottom_tick_ports, not both")
+        if any(p < 1 for p in (*self.top_tick_ports, *self.bottom_tick_ports)):
+            raise ValueError("Frame tick ports are 1-based positive positions")
         object.__setattr__(self, "axis_width", _finite_positive(self.axis_width, "frame axis_width"))
         object.__setattr__(self, "tick_half_height", _finite_positive(self.tick_half_height, "tick_half_height", allow_zero=True))
         object.__setattr__(self, "boundary_width", _finite_positive(self.boundary_width, "boundary_width"))
@@ -95,6 +116,7 @@ class Connector:
     visible: bool = True
     name: str | None = None
     offset_down: float = 0.0
+    layer: str = "back"
 
     def __post_init__(self) -> None:
         if not isinstance(self.strand_a, int) or self.strand_a < 1:
@@ -108,6 +130,8 @@ class Connector:
         object.__setattr__(self, "line_width", _finite_positive(self.line_width, "connector line_width"))
         object.__setattr__(self, "node_radius", _finite_positive(self.node_radius, "connector node_radius", allow_zero=True))
         object.__setattr__(self, "offset_down", _finite_positive(self.offset_down, "connector offset_down", allow_zero=True))
+        if self.layer not in ("back", "front"):
+            raise ValueError("Connector layer must be 'back' or 'front'")
 
 
 @dataclass(frozen=True)

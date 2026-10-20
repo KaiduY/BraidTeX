@@ -1,7 +1,15 @@
-# BraidTeX 0.6.0 release notes
+# BraidTeX 0.7.0 release notes
 
-This release extends the prior BraidTeX implementation with reusable coordinate frames, ticks and separators; persistent-identity horizontal connectors; strand annotations; auxiliary dotted paths; named regions; model-level vertical stacking; and cabling-based operadic strand substitution. Stacks and substitutions operate on structured models, not rendered images. Connector attachment alternatives are represented as separate signed diagram terms.
+This rendering-focused release retains the 0.6 model-level composition operations and improves strand geometry, automatic endpoint spacing, baseline alignment, strand tracing, connector depth ordering, tick placement, and auxiliary trajectories.
 
-The LaTeX source transformer and CLI remain a preprocessing workflow: use `braidtex build your-document.tex` to transform marked expressions, generate/cache TikZ assets in the document tree, and compile with `pdflatex`. No unrestricted shell-escape execution is required.
+- Each strand identity is rendered as one continuous path across fan, crossing, and output sections. Crossing clearance is a short local cubic halo around the overpassing segment rather than a large gap across a whole arc.
+- The default inline baseline is centered vertically on the diagram; `(braid-base)` remains available for the historical bottom-aligned behavior.
+- Parenthesization uses a deterministic recursive gap hierarchy with a bounded cluster-gap increase at deeper levels.
+- Frame and separator ticks can be bound to endpoint ports instead of fixed coordinates.
+- Connectors have explicit `back`/`front` depth ordering, always keep endpoint nodes visible, and reject offsets that do not fit in their crossing-level band.
+- Full-range auxiliary paths that follow strands are offset copies of the actual strand path; arbitrary control points remain available for intentional custom trajectories.
+- Substitution keeps the outer and inserted braid generator conventions, and nested layout information is attached to replacement bundles without silently changing semantic endpoint labels.
 
-Validation performed for this release: 77 automated tests passed. The composition gallery compiled with `pdflatex` to two pages without detected warnings/overfull boxes. The composition-notation source was transformed with `braidtex build --force` and compiled to a one-page PDF.
+## Validation
+
+The 82-test automated suite passed after the implementation changes. The refreshed composition gallery compiled to two pages with `pdflatex`; the composition notation example and minimal inline/display-math example each compiled to one-page PDFs. The source tests include regression checks for center baseline, coherent identity paths, port-derived ticks, and connector depth ordering.
