@@ -52,10 +52,14 @@ def prepare(main: Path, assets: Optional[Path] = None, force: bool = False,
     build.mkdir(parents=True, exist_ok=True)
     out, items, _ = transform_project(main, build, Cache(assets, force), ref)
     # mirror source sub-directories so \include aux files can be written
-    for d in root.rglob("*"):
-        if d.is_dir() and not any(p.startswith(".") for p in d.relative_to(root).parts) \
-                and d != assets:
-            (build / d.relative_to(root)).mkdir(parents=True, exist_ok=True)
+    skip = [build, assets]
+    for d in [d for d in root.rglob("*") if d.is_dir()]:       # snapshot: we create dirs below
+        rel = d.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        if any(d == k or k in d.parents for k in skip):         # never recurse into our own output
+            continue
+        (build / rel).mkdir(parents=True, exist_ok=True)
     return out, build, items
 
 
@@ -76,11 +80,13 @@ def compile_document(main: Path, engine: str = "pdflatex", assets: Optional[Path
     jobname = main.stem
     if shutil.which("latexmk"):
         cmd = ["latexmk", ENGINES[engine], "-interaction=nonstopmode", "-halt-on-error",
+               "-synctex=1", "-file-line-error",
                f"-outdir={rel_build}", f"-jobname={jobname}", "-silent",
                f"-pdflatex={engine} -no-shell-escape %O %S", rel_out]
         runs = [cmd]
     else:
         base = [engine, "-interaction=nonstopmode", "-halt-on-error", "-no-shell-escape",
+                "-synctex=1", "-file-line-error",
                 f"-output-directory={rel_build}", f"-jobname={jobname}", rel_out]
         runs = [base, base]
     for cmd in runs:
@@ -89,15 +95,83 @@ def compile_document(main: Path, engine: str = "pdflatex", assets: Optional[Path
             print(proc.stdout)
         if proc.returncode != 0:
             log = build_dir / f"{jobname}.log"
+            remap_log(log, root, build_dir)
             tail = "\n".join((log.read_text(errors="replace") if log.exists()
                               else proc.stdout).splitlines()[-25:])
             raise BuildError(f"{cmd[0]} failed (exit {proc.returncode}). Log tail:\n{tail}")
     pdf = build_dir / f"{jobname}.pdf"
     if not pdf.exists():
         raise BuildError(f"{engine} reported success but {pdf} does not exist")
-    dest = root / f"{jobname}.pdf"
+    remap_synctex(build_dir / f"{jobname}.synctex.gz", root, build_dir)
+    remap_log(build_dir / f"{jobname}.log", root, build_dir)
+    if build is not None:                 # explicit --build DIR: the PDF stays there (e.g. out/)
+        return pdf, items
+    dest = root / f"{jobname}.pdf"        # default: copy next to the source
     shutil.copyfile(pdf, dest)
     return dest, items
+
+
+def remap_log(log: Path, root: Path, build: Path) -> int:
+    """Rewrite ``<build>/file.tex`` to ``file.tex`` in the LaTeX log (``-file-line-error``
+    messages) when the original exists, so editors link errors to your own sources.
+    Line numbers already agree (see ``transform_text``)."""
+    import re
+    if not log.is_file():
+        return 0
+    rel = os.path.relpath(build, root).replace(os.sep, "/")
+    text = log.read_text(encoding="utf-8", errors="surrogateescape")
+    n = 0
+
+    def fix(m: "re.Match[str]") -> str:
+        nonlocal n
+        if (root / m.group(2)).is_file():
+            n += 1
+            return m.group(2)
+        return m.group(0)
+
+    new = re.sub(r"(?<![\w/.-])((?:\./)?" + re.escape(rel) + r"/)([^\s:()\"]+\.tex)", fix, text)
+    if n:
+        log.write_text(new, encoding="utf-8", errors="surrogateescape")
+    return n
+
+
+def remap_synctex(path: Path, root: Path, build: Path) -> int:
+    """Point SyncTeX at the *original* sources.
+
+    The transformed copies live in the build directory but have the same line
+    numbers as the originals (``transform_text`` preserves them), so rewriting
+    the ``Input:`` entries makes forward and inverse search use your own files.
+    Returns the number of rewritten entries."""
+    import gzip
+    import re
+    if not path.is_file():
+        return 0
+    try:
+        text = gzip.open(path, "rt", encoding="utf-8", errors="surrogateescape").read()
+    except OSError:
+        return 0
+    n = 0
+
+    def fix(m: "re.Match[str]") -> str:
+        nonlocal n
+        raw = m.group(2)
+        cand = Path(raw)
+        cand = cand if cand.is_absolute() else (root / cand)
+        try:
+            rel = cand.resolve().relative_to(build.resolve())
+        except ValueError:
+            return m.group(0)
+        orig = root / rel
+        if not orig.is_file():
+            return m.group(0)
+        n += 1
+        return f"{m.group(1)}{orig}"
+
+    new = re.sub(r"(?m)^(Input:\d+:)(.*)$", fix, text)
+    if n:
+        with gzip.open(path, "wt", encoding="utf-8", errors="surrogateescape") as fh:
+            fh.write(new)
+    return n
 
 
 def clean_project(main_or_dir: Path, assets: Optional[Path] = None) -> List[Path]:

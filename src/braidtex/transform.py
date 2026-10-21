@@ -289,6 +289,14 @@ class TransformResult:
     changed: bool = False
 
 
+def _pad(text: str, start: int, stop: int) -> str:
+    """Line-number preservation: a replaced span that covered k extra lines is preceded by k
+    comment-only line breaks, so the text after it keeps its original line number (SyncTeX,
+    error messages).  ``%`` swallows each newline, so layout and spacing are unaffected."""
+    k = text.count("\n", start, stop)
+    return "%\n" * k
+
+
 _TOKEN = re.compile(r"\\braid(setup|id)?(?![A-Za-z@])")
 
 
@@ -335,7 +343,7 @@ def transform_text(text: str, name: str = "<expr>", cache: Optional[Cache] = Non
                                   asset.reason))
                 replacement = f"\\braidfig{{{ref}/{asset.path.with_suffix('').name}}}"
             out.append(text[last:mt.start()])
-            out.append(replacement)
+            out.append(_pad(text, mt.start(), end2 + 1) + replacement)
             last = end2 + 1
             continue
         if mt.group(1):                                   # \braidsetup
@@ -356,7 +364,7 @@ def transform_text(text: str, name: str = "<expr>", cache: Optional[Cache] = Non
             stem = asset.path.with_suffix("").name
             replacement = f"\\braidfig{{{ref}/{stem}}}"
         out.append(text[last:mt.start()])
-        out.append(replacement)
+        out.append(_pad(text, mt.start(), end + 1) + replacement)
         last = end + 1
     out.append(text[last:])
     new = "".join(out)

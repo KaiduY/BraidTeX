@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.1
+
+### Added
+- **Editor integration (VS Code / LaTeX Workshop).** `braidtex compile --build out` keeps all outputs in
+  `out/` like a latexmk `-outdir=out` recipe; `docs/vscode/settings.json` and README/manual sections give the
+  ready-made tool/recipe.
+- Transformed sources **preserve line numbers** (replaced multi-line braids leave comment-only line breaks), and
+  the SyncTeX file and the LaTeX log are rewritten to point at the *original* files, so forward search and
+  error links work on your own sources. `-synctex=1 -file-line-error` are passed automatically.
+
+### Fixed
+- `--build DIR` inside the project directory made the "mirror sub-directories" step recurse into its own output
+  (`out/out/out/...` until "File name too long"). It now never descends into the build or asset directories.
+- With an explicit `--build`, the PDF is no longer also copied next to the source.
+- 3 new regression tests (build dir inside the project, line preservation, SyncTeX/log remapping); 194 -> 197 total.
+
 ## 0.2.0
 
 ### Added

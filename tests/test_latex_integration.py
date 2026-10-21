@@ -143,3 +143,52 @@ def test_baseline_alignment_inline(tmp_path):
     for ht, dp in (vals[0:2], vals[2:4]):
         centre = (ht - dp) / 2
         assert abs(centre - (axis - 0.5)) < 0.6, (centre, axis)
+
+
+def test_build_dir_inside_project_vscode_style(tmp_path):
+    """`--build out` (LaTeX Workshop style): no recursion into the output dir, line numbers
+    preserved, SyncTeX points at the original file, PDF stays in out/."""
+    import gzip
+    root = tmp_path / "vs code"
+    (root / "chapters").mkdir(parents=True)
+    src = ("\\documentclass{article}\n\\usepackage{braidtex}\n\\begin{document}\n"
+           "Hello\n\\[\n  f \\circ\n  \\braid{\n    \\bin{x_1 x_2}\n    \\bcr{1}\n  }\n"
+           "  \\circ g\n\\]\nAfter $\\braid{\\bcr{1}}$ end.\n\\end{document}\n")
+    (root / "main.tex").write_text(src)
+    pdf, items = compile_document(root / "main.tex", engine="lualatex"
+                                  if shutil.which("lualatex") else "pdflatex", build=root / "out")
+    assert pdf == (root / "out" / "main.pdf").resolve() or pdf == root / "out" / "main.pdf"
+    assert pdf.exists() and not (root / "main.pdf").exists()
+    assert not (root / "out" / "out").exists()
+    t = (root / "out" / "main.tex").read_text().splitlines()
+    orig = src.splitlines()
+    assert t[orig.index("  \\circ g")] == "  \\circ g"              # same line number as before
+    assert t[orig.index("After $\\braid{\\bcr{1}}$ end.")].startswith("After $\\braidfig{")
+    assert len(t) == len(orig)
+    sx = gzip.open(root / "out" / "main.synctex.gz", "rt").read()
+    assert f"Input:1:{(root / 'main.tex')}" in sx and "/out/main.tex" not in sx
+    assert (root / "main.tex").read_text() == src
+
+
+def test_line_preservation_unit():
+    from braidtex import Cache
+    from braidtex.transform import transform_text
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        src = "a\n\\braid{\n \\bcr{1}\n}\nb \\braid{\\bcr{1}} c\nz\n"
+        r = transform_text(src, "t.tex", Cache(d), "br")
+        assert r.text.count("\n") == src.count("\n")
+        assert r.text.splitlines()[-1] == "z" and "b \\braidfig{" in r.text
+
+
+def test_error_log_points_to_original_file(tmp_path):
+    root = tmp_path / "p"
+    root.mkdir()
+    (root / "main.tex").write_text(
+        "\\documentclass{article}\\usepackage{braidtex}\n\\begin{document}\n"
+        "$\\braid{\\bcr{1}}$\n\\undefinedmacro\n\\end{document}\n")
+    with pytest.raises(BuildError) as e:
+        compile_document(root / "main.tex", build=root / "out")
+    log = (root / "out" / "main.log").read_text()
+    assert "main.tex:4:" in log and "out/main.tex" not in log
+    assert "main.tex:4:" in str(e.value)

@@ -47,7 +47,7 @@ T(r"""
 \braidsetup{lw=0.9pt}
 
 \title{\textbf{BraidTeX} --- User Manual\\[2pt]\large Braid and little-disc diagrams as ordinary mathematics}
-\author{version 0.2.0}
+\author{version 0.2.1}
 \date{}
 
 \begin{document}
@@ -86,6 +86,28 @@ Python $\ge 3.9$ (no third-party packages), a TeX distribution with \opt{tikz}, 
 LST(r"""
 pip install .                 # from the BraidTeX directory   (pip install -e .[test] to develop)
 braidtex --version
+""")
+T(r"""
+\subsection{VS Code / LaTeX Workshop}\label{sec:vscode}
+Add a tool that runs \opt{braidtex compile} and make it the default recipe (the complete snippet is in
+\opt{docs/vscode/settings.json}; your latexmk recipe stays available for documents without braids):
+""")
+LST(r"""
+"latex-workshop.latex.tools": [
+  { "name": "braidtex (lualatex)", "command": "braidtex",
+    "args": ["compile", "--engine", "lualatex", "--build", "out", "%DOC_EXT%"], "env": {} }
+],
+"latex-workshop.latex.recipes": [ { "name": "braidtex (lualatex)", "tools": ["braidtex (lualatex)"] } ],
+"latex-workshop.latex.recipe.default": "braidtex (lualatex)",
+"latex-workshop.latex.outDir": "out"
+""")
+T(r"""
+\opt{--build out} keeps PDF, \opt{.aux}, \opt{.log} and \opt{.synctex.gz} in \opt{out/}; the transformed copy of
+your source is \opt{out/main.tex}. \textbf{Always edit your original files.} The copy has the \emph{same line
+numbers} as your source, and SyncTeX data and error messages are rewritten to point at the originals, so error
+links and forward search work on your own \opt{main.tex}. Double-clicking \emph{on a drawn braid} in the PDF
+opens its generated asset (\opt{braids/bt-*.tikz}); click the surrounding text instead. The tool passes
+\opt{-halt-on-error} (the first error stops the build) rather than \opt{-f}.
 """)
 T(r"""
 \subsection{A first document}

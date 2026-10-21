@@ -1,0 +1,26 @@
+{
+  // Add to your VS Code settings (user or .vscode/settings.json), keeping your existing entries.
+  // Needs `braidtex` on the PATH of VS Code (e.g. `pip install .` into the Python you use);
+  // alternatively set "command": "python" and put "-m", "braidtex" first in "args".
+  "latex-workshop.latex.tools": [
+    {
+      "name": "lualatexmk",
+      "command": "latexmk",
+      "args": ["-synctex=1", "-interaction=nonstopmode", "-file-line-error",
+               "-lualatex", "-f", "-outdir=out", "%DOC%"],
+      "env": {}
+    },
+    {
+      "name": "braidtex (lualatex)",
+      "command": "braidtex",
+      "args": ["compile", "--engine", "lualatex", "--build", "out", "%DOC_EXT%"],
+      "env": {}
+    }
+  ],
+  "latex-workshop.latex.recipes": [
+    { "name": "braidtex (lualatex)", "tools": ["braidtex (lualatex)"] },
+    { "name": "latexmk (lualatex)", "tools": ["lualatexmk"] }
+  ],
+  "latex-workshop.latex.recipe.default": "braidtex (lualatex)",
+  "latex-workshop.latex.outDir": "out"
+}
