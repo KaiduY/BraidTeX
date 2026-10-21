@@ -1,0 +1,21 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{braidtex}[2026/10/19 v0.2.0 Braid diagrams (preprocessed TikZ)]
+% BraidTeX is a *preprocessing* system: run `braidtex compile main.tex`
+% (or `braidtex transform main.tex`).  The preprocessor replaces every
+% \braid{...} by \braidfig{<asset>}.  Nothing here executes external programs.
+% Note: do not load together with the CTAN package `braids`, which also defines \braid.
+\RequirePackage{tikz}
+\RequirePackage{xcolor}
+\newcommand{\braidsetup}[1]{}% read by the preprocessor only
+\newcommand{\braid}[1]{%
+  \PackageWarning{braidtex}{\string\braid\space was not preprocessed. Run `braidtex compile'}%
+  \mbox{\fbox{\scriptsize\ttfamily unprocessed braid}}}
+\newcommand{\braidid}[2]{%
+  \PackageWarning{braidtex}{\string\braidid\space was not preprocessed. Run `braidtex compile'}%
+  \mbox{\fbox{\scriptsize\ttfamily unprocessed braid identity}}}
+\newcommand{\braidfig}[1]{%
+  \IfFileExists{"#1.tikz"}%
+    {\input{"#1.tikz"}}%
+    {\PackageError{braidtex}{Missing braid asset `#1.tikz'}%
+       {Run `braidtex compile' (or `braidtex transform') again from the project directory.}}}
+\endinput

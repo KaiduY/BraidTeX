@@ -1,0 +1,97 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{braidtex}
+\setlength{\parindent}{0pt}\setlength{\parskip}{4pt}
+
+\begin{document}
+\section*{BraidTeX 0.2 --- feature showcase}
+
+\subsection*{1. Crossings, identity, colours}
+Positive $\sigma_1$ (left strand over), negative $\sigma_1^{-1}$, a three-strand word, identities:
+\[
+  \braid{\bin{a b}\bcr{1}}\quad \braid{\bin{a b}\bcr{-1}}\quad
+  \braid{\bin{x_1 x_2 x_3}\bcr{1 -2 1 2}}\quad \braid{\bn{3}}
+\]
+One colour per strand; colours follow strands; default palette:
+\[
+  \braid{\bin{x_1 x_2 x_3}\bcr{1 2 1}\bcol{1}{teal!75!black}\bcol{2}{orange!90!black}\bcol{3}{purple}}
+  \qquad
+  \braid{\bin{a b c d}\bset{palette}\bcr{2 1 3 -2 -1 -3}}
+\]
+
+\subsection*{2. Automatic layout from parentheses}
+$x_1x_2x_3$, $(x_1x_2)x_3$, $x_1(x_2x_3)$, $(x_1x_2)(x_3x_4)$, $((x_1x_2)x_3)x_4$:
+\[
+  \braid{\bin{x_1 x_2 x_3}}\quad \braid{\bin{(x_1 x_2) x_3}}\quad \braid{\bin{x_1 (x_2 x_3)}}\quad
+  \braid{\bin{(x_1 x_2)(x_3 x_4)}}\quad \braid{\bin{((x_1 x_2) x_3) x_4}}
+\]
+Different source and target parenthesizations:
+\[
+  \braid{\bin{(x_1 x_2) x_3}\bcr{2 1}\bout{x_3 (x_1 x_2)}}\qquad
+  \braid{\bin{(a b)(c d)}\bcr{2}\bout{a (c b) d}\bset{width=3.6cm}}
+\]
+
+\subsection*{3. Axes and marked points}
+\[
+  \braid{\bin{1 2 3}\bcr{1 -2}\bax{frame}\bpt{in}{2}{}\bpt{out}{3}{p}}\qquad
+  \braid{\bin{x_1 x_2}\bcr{1}\bax{h,front}}
+\]
+
+\subsection*{4. Composition: an inner braid replaces a strand}
+Outer braid $\sigma_1$ on $x\,y\,z$; strand $y$ is replaced by the braid $\sigma_1$ on $a\,b$.
+\textbf{Mode 1, shadow} (default) shades the whole region the strand is replaced in; best when the
+ribbon travels through crossings with other strands. \textbf{Mode 2, separator} draws two dashed
+lines beside the inner braid only; best when the inner braid should read as a box inside a strand.
+\[
+  \braid{\bin{x y z}\bcr{1}\bsub{2}{\bin{a b}\bcr{1}}\bset{compose=shadow}}\qquad
+  \braid{\bin{x y z}\bcr{1}\bsub{2}{\bin{a b}\bcr{1}}\bset{compose=separator}}\qquad
+  \braid{\bin{x y z}\bcr{1}\bsub{2}{\bin{a b}\bcr{1}}\bset{compose=none}}
+\]
+Inner braid at the bottom (\texttt{at=bottom}), shadow and separators; then two substitutions in one braid (colours, \texttt{shadowcolor}):
+\[
+  \braid{\bin{x y z}\bcr{1 2}\bsub{2}{\bin{a b}\bcr{-1 -1}}\bset{at=bottom}}\qquad
+  \braid{\bin{x y z}\bcr{1 2}\bsub{2}{\bin{a b}\bcr{1 -1}}\bset{compose=separator,at=bottom}}\qquad
+  \braid{\bin{x y z}\bcr{2 1}\bsub{1}{\bin{p q}\bcr{1}\bcol{1}{red}\bcol{2}{blue}}%
+         \bsub{3}{\bin{u v}\bcr{-1}}\bset{shadowcolor=teal!15}}
+\]
+
+\subsection*{5. Little 2-disc boundary pictures}
+Each parenthesized group is one disc; $((ab)c)$ puts $a,b$ in an inner disc, which together with $c$
+lies in the outer disc. Discs are drawn for the input (top) and the output (bottom) configuration.
+\[
+  \braid{\bin{((a b) c)}\bset{discs}}\quad
+  \braid{\bin{(a b)(c d)}\bcr{2}\bset{discs}}\quad
+  \braid{\bin{((a b) c) d}\bcr{3}\bset{discs,width=4.2cm}}\quad
+  \braid{\bin{a ((b c) d)}\bset{discs=in}}
+\]
+
+\subsection*{6. Standard identities}
+Yang--Baxter / braid relation, far commutativity, $\sigma\sigma^{-1}=1$, the basic crossings:
+\[ \braidid{ybe}{labels={a b c}} \]
+\[ \braidid{far}{} \]
+\[ \braidid{crossings}{} \]
+\[ \braidid{inverse}{colors={red blue}} \]
+The associator as a braid between different parenthesizations (and its inverse):
+\[ \braidid{assoc}{} \]
+Pentagon and hexagon (nodes, arrows and labels are generated; all configurable):
+\[ \braidid{pentagon}{} \]
+\[ \braidid{hexagon}{} \]
+Restyled (own objects, no tensor sign, other associator symbol, node boxes, colour, scaled):
+\[ \braidid{pentagon}{objects={W X Y Z},op={},assoc={\Phi},color=teal!60!black,nodestyle={draw=gray,rounded corners=2pt,inner sep=3pt},scale=0.8} \]
+
+\subsection*{7. Inside expressions and inline}
+\begin{align}
+  \psi(\tau) &= \braid{\bin{1 2}\bcr{1}\bax{frame}} \cdot
+  \left(\braid{\bin{1 2}\bcr{-1}\bax{frame}}\right)^{\nu},\\
+  \braid{\bin{x_1 x_2}\bcr{1}\bset{sigma}} &= \braid{\bin{x_1 x_2}\bcr{1}\blab{in}{a b}\blab{out}{b a}}
+\end{align}
+Inline: $\sigma_1 = \braid{\bin{a b}\bcr{1}\bset{inline,labels=none}}$ and
+$\mathrm{id}=\braid{\bn{2}\bset{inline}}$ sit on the math axis next to ordinary symbols.
+
+\subsection*{8. Source scanning}
+\begin{verbatim}
+\braid{\bin{x_1 x_2}\bcr{1}}   % shown literally, never transformed
+\end{verbatim}
+% \braid{this is a comment}
+\end{document}

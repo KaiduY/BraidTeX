@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "braidtex"
+version = "0.2.0"
+description = "Mathematical authoring system for braid diagrams in LaTeX"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+braidtex = "braidtex.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+braidtex = ["data/*.sty"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

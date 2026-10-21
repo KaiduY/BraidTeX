@@ -1,0 +1,21 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{braidtex}
+
+\begin{document}
+
+A braid inside an equation:
+\[
+    f \circ
+    \braid{
+        \bin{x_1 x_2 x_3}
+        \bcr{1}
+        \bcr{-2}
+        \bout{x_2 x_3 x_1}
+    }
+    \circ g
+\]
+
+An unlabeled identity braid, inline: $\braid{\bn{3}}$ and a crossing $\braid{\bcr{1}}$.
+
+\end{document}
