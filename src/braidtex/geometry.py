@@ -62,6 +62,7 @@ def _line(p: Pt, q: Pt) -> Bez:
     return Bez(p, _mid(p, q, 1 / 3), _mid(p, q, 2 / 3), q)
 
 
+NATURAL_EASE = 0.6  # handle length (fraction of the layer height) in natural mode: rounder bends
 BAND_EASE = 0.5     # length of the vertical Bezier handles as a fraction of the layer height
 # (1/3 would make y linear in the parameter but gives near-kinks at the joins: peak curvature
 #  falls from ~9/cm to ~4/cm with 1/2 while y stays strictly monotone)
@@ -70,6 +71,42 @@ BAND_EASE = 0.5     # length of the vertical Bezier handles as a fraction of the
 def _band(x0: float, y0: float, x1: float, y1: float) -> Bez:
     dy = (y1 - y0) * BAND_EASE
     return Bez((x0, y0), (x0, y0 + dy), (x1, y1 - dy), (x1, y1))
+
+
+def _hermite_bez(x0: float, y0: float, x1: float, y1: float, m0: float, m1: float) -> Bez:
+    """Cubic curve from (x0,y0) to (x1,y1) (y decreasing) with slopes ``m = dx/d(depth)``
+    at both ends.  Equal slopes on both sides of a level make the join G1."""
+    dy = (y1 - y0) * NATURAL_EASE
+    run = abs(dy)
+    return Bez((x0, y0), (x0 + m0 * run, y0 + dy), (x1 - m1 * run, y1 - dy), (x1, y1))
+
+
+def _slopes(knots: List[float], depth: float, tension: float) -> List[float]:
+    """Monotone (Fritsch-Carlson, equal spacing) tangent slopes at the levels.
+
+    A strand that keeps moving in one direction gets the harmonic mean of the neighbouring
+    secants (nearly straight); at a turning point or a standstill the slope is 0.  The
+    end slopes are 0 (strings leave the endpoints vertically).  ``tension`` scales all
+    slopes: 0 gives the default zero-slope shapes."""
+    m = [0.0] * len(knots)
+    sec = [(knots[i + 1] - knots[i]) / depth for i in range(len(knots) - 1)]
+    for i in range(1, len(knots) - 1):
+        a, b = sec[i - 1], sec[i]
+        if a * b > 1e-12:
+            m[i] = tension * 2 * a * b / (a + b)
+    return m
+
+
+def _wrapped(knots: List[float], wrap: float) -> List[float]:
+    """Let a strand swing ``wrap`` further at a back-and-forth turn (rounder loops)."""
+    out = list(knots)
+    if wrap <= 0:
+        return out
+    for i in range(1, len(knots) - 1):
+        a, b = knots[i] - knots[i - 1], knots[i + 1] - knots[i]
+        if a * b < -1e-12:
+            out[i] = knots[i] + (wrap if a > 0 else -wrap)
+    return out
 
 
 def _seg_dist(p: Pt, a: Pt, b: Pt) -> float:
@@ -151,7 +188,9 @@ def reverse_path(path: List[Bez]) -> List[Bez]:
     return [_reverse(b) for b in reversed(path)]
 
 
-def build_geometry(braid: Braid) -> Geometry:
+def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
+    """Build the geometry.  Returns ``(geometry, ok)``; with ``strict`` a failed natural
+    attempt returns ``(None, False)`` immediately so the caller can lower the tension."""
     st, n = braid.style, braid.n
     layers = braid.layers
     B = max(len(layers), 1)
@@ -206,28 +245,43 @@ def build_geometry(braid: Braid) -> Geometry:
     if not layers:
         levels.append(list(levels[0]))
 
+    knots: Dict[int, List[float]] = {}
+    slopes: Dict[int, List[float]] = {}
+    if natural:
+        for k in range(1, n + 1):
+            seq = [x_at(t, levels[t].index(k)) for t in range(B + 1)]
+            knots[k] = _wrapped(seq, wrap)
+            slopes[k] = _slopes(knots[k], bh, tau)
+
     segs: Dict[int, List[Bez]] = {k: [_line((in_x[k - 1], H), (in_x[k - 1], ys[0]))]
                                   for k in range(1, n + 1)}
     xings: List[CrossingGeom] = []
+    ok = True
     cuts: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
     clearance = st.gap + st.lw * PT_CM
     for t in range(1, B + 1):
         curves: Dict[int, Bez] = {}
         for k in range(1, n + 1):
             js, je = levels[t - 1].index(k), levels[t].index(k)
-            curves[k] = _band(x_at(t - 1, js), ys[t - 1], x_at(t, je), ys[t])
+            if natural:
+                curves[k] = _hermite_bez(knots[k][t - 1], ys[t - 1], knots[k][t], ys[t],
+                                         slopes[k][t - 1], slopes[k][t])
+            else:
+                curves[k] = _band(x_at(t - 1, js), ys[t - 1], x_at(t, je), ys[t])
             segs[k].append(curves[k])
+        if natural and not _layer_ok(curves, levels[t - 1], levels[t], W):
+            if strict:
+                return None, False
+            ok = False
         layer = layers[t - 1] if layers else ()
         for cr in layer:
             ov, un = curves[cr.over], curves[cr.under]
-            # x_over(s) == x_under(s) with the common ease f(s) = 3s^2 - 2s^3
-            dx0 = ov.p0[0] - un.p0[0]
-            dx1 = ov.p3[0] - un.p3[0]
-            fstar = dx0 / (dx0 - dx1)
+            # crossing parameter: x_over(s) - x_under(s) changes sign exactly once in the layer
+            neg0 = bez_point(ov, 0.0)[0] < bez_point(un, 0.0)[0]
             lo, hi = 0.0, 1.0
             for _ in range(60):
                 mid = (lo + hi) / 2
-                if 3 * mid * mid - 2 * mid ** 3 < fstar:
+                if (bez_point(ov, mid)[0] < bez_point(un, mid)[0]) == neg0:
                     lo = mid
                 else:
                     hi = mid
@@ -251,6 +305,8 @@ def build_geometry(braid: Braid) -> Geometry:
             s_lo, c1 = edge(0.0, s_star)
             s_hi, c2 = edge(1.0, s_star)
             if c1 or c2:
+                if natural and strict:
+                    return None, False
                 warnings.warn(f"layer {t}: the clearance gap of a crossing reaches the end of "
                               f"its layer; increase band/width or decrease gap", stacklevel=2)
             cuts.setdefault((cr.under, t), []).append((s_lo, s_hi))
@@ -288,15 +344,52 @@ def build_geometry(braid: Braid) -> Geometry:
             runs.append(cur)
         strands.append(StrandGeom(k, braid.strand_color(k), segs[k], runs))
 
-    regions = _regions(braid, levels, x_at, ys, H, B, st)
+    regions, rok = _regions(braid, levels, x_at, ys, H, B, st, natural, tau, wrap, bh, segs)
+    if natural and not rok:
+        if strict:
+            return None, False
+        ok = False
     return Geometry(W, H, in_x, out_x, strands, xings, ys, B, regions, d_in, d_out,
-                    pad_top, pad_bot)
+                    pad_top, pad_bot), ok
 
 
-def _regions(braid: Braid, levels, x_at, ys, H: float, B: int, st) -> List[RegionGeom]:
+def _layer_ok(curves: Dict[int, Bez], prev: List[int], nxt: List[int], width: float) -> bool:
+    """Is this layer exactly the intended crossing pattern?  Sampled at common heights:
+    a pair that swaps must change the sign of ``x_a - x_b`` exactly once, any other pair
+    never, and non-crossing strands must keep a visible distance."""
+    ks = sorted(curves)
+    xs = {k: [bez_point(curves[k], i / 16)[0] for i in range(17)] for k in ks}
+    for k in ks:
+        if min(xs[k]) < -0.05 or max(xs[k]) > width + 0.05:
+            return False
+    for ia, a in enumerate(ks):
+        for b in ks[ia + 1:]:
+            start = 1 if prev.index(a) > prev.index(b) else -1
+            end = 1 if nxt.index(a) > nxt.index(b) else -1
+            changes, last, closest = 0, 0, 1e9
+            for xa, xb in zip(xs[a], xs[b]):
+                d = xa - xb
+                closest = min(closest, abs(d))
+                if abs(d) < 1e-9:
+                    continue
+                sg = 1 if d > 0 else -1
+                if last and sg != last:
+                    changes += 1
+                last = sg
+            if changes != (1 if start != end else 0):
+                return False
+            if start == end and closest < 0.1:
+                return False
+    return True
+
+
+def _regions(braid: Braid, levels, x_at, ys, H: float, B: int, st, natural: bool = False,
+             tau: float = 0.0, wrap: float = 0.0, bh: float = 1.0,
+             segs=None) -> Tuple[List[RegionGeom], bool]:
     out: List[RegionGeom] = []
+    ok = True
     if st.compose == "none":
-        return out
+        return out, ok
     d = st.regionpad
     for r in braid.regions:
         ids = set(r.strands)
@@ -315,8 +408,14 @@ def _regions(braid: Braid, levels, x_at, ys, H: float, B: int, st) -> List[Regio
         def guide(side: int) -> List[Bez]:
             xs = [x_at(t, ext[t][0 if side < 0 else 1]) + side * d for t in range(B + 1)]
             path = [_line((xs[0], H), (xs[0], ys[0]))]
+            if natural:
+                kn = _wrapped(xs, wrap)
+                sl = _slopes(kn, bh, tau)
             for t in range(1, B + 1):
-                path.append(_band(xs[t - 1], ys[t - 1], xs[t], ys[t]))
+                if natural:
+                    path.append(_hermite_bez(kn[t - 1], ys[t - 1], kn[t], ys[t], sl[t - 1], sl[t]))
+                else:
+                    path.append(_band(xs[t - 1], ys[t - 1], xs[t], ys[t]))
             path.append(_line((xs[B], ys[B]), (xs[B], 0.0)))
             return path
 
@@ -328,9 +427,42 @@ def _regions(braid: Braid, levels, x_at, ys, H: float, B: int, st) -> List[Regio
         else:
             i0 = 0 if r.first == 1 else r.first
             i1 = B + 1 if r.last == B else r.last
-        L, R = guide(-1)[i0:i1 + 1], guide(+1)[i0:i1 + 1]
+        FL, FR = guide(-1), guide(+1)
+        if natural and segs is not None:      # the markings must stay clear of the ribbon strands
+            for t in range(1, B + 1):
+                for u in (0.0, 0.25, 0.5, 0.75, 1.0):
+                    lx, rx = bez_point(FL[t], u)[0], bez_point(FR[t], u)[0]
+                    for k in ids:
+                        px = bez_point(segs[k][t], u)[0]
+                        if not (lx < px - 0.03 and px < rx - 0.03):
+                            ok = False
+        L, R = FL[i0:i1 + 1], FR[i0:i1 + 1]
         out.append(RegionGeom(tuple(sorted(ids)), L, R, r.first, r.last))
-    return out
+    return out, ok
+
+
+def build_geometry(braid: Braid) -> Geometry:
+    """Strand geometry in the style chosen by ``braid.style.geometry``.
+
+    ``default``: every layer is an independent S-curve with vertical tangents at the
+    layer boundaries (provably exactly one crossing per swapping pair).
+    ``natural``: every strand is one string - a spline through its positions at the
+    layer boundaries with monotone tangents (nearly straight through consecutive
+    crossings, bends only at real turns).  The result is verified layer by layer; if a
+    check fails the tension (and wrap) are reduced stepwise, ending at the default shapes
+    (tension 0), which are always correct."""
+    st = braid.style
+    if st.geometry != "natural":
+        return _build(braid, 0.0, 0.0, False, False)[0]
+    for f in (1.0, 0.75, 0.5, 0.25, 0.0):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            geom, ok = _build(braid, st.tension * f, st.wrap * f, True, f > 0)
+        if ok or f == 0.0:
+            for w in caught:                  # replay only the warnings of the accepted attempt
+                warnings.warn(w.message, w.category, stacklevel=2)
+            return geom
+    raise AssertionError("unreachable")
 
 
 # --------------------------------------------------------------- analysis

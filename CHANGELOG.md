@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+- **Natural geometry mode** (`geometry=natural`, also via `\braidsetup`): a strand is one continuous string
+  instead of a chain of independent S-curves. Each strand is a spline through its positions at the layer
+  boundaries with monotone (Fritsch-Carlson) tangents: consecutive crossings are traversed in one nearly
+  straight run, and a strand bends only where it really turns. Measured on typical words: bending energy
+  -35..-40 %, fewer inflection points (e.g. 8 -> 6, 11 -> 7), same crossings. `default` is unchanged.
+- `tension` (0..1; 0 reproduces the default shapes) and `wrap` (cm, default 0.08): how loosely a string swings
+  around another in back-and-forth twists (shoelace look instead of tight metallic turns).
+- Verification and fallback: each natural attempt is checked (exact crossing pattern per layer by sampled
+  sign changes, minimum separation of non-crossing strands, bounds, crossing gaps fit their layer, ribbon
+  markings clear of their strands); on failure tension and wrap are reduced stepwise down to the default shapes,
+  which are provably correct. Natural mode works with ribbons, discs, axes and all identities.
+- 24 new tests (221 total): exact crossings for random words/trees/wraps/tensions, G1 joins, straight runs
+  for consecutive crossings, genuine turns kept, wrap widens twists, hostile settings fall back correctly,
+  clean gaps, ribbon containment, option validation, JSON and cache keys.
+- Manual section "Strand geometry" and showcase section 8 with side-by-side comparisons.
+
+### Changed
+- Crossing parameter is now found by root finding on the actual curves (identical result for `default`).
+- Renderer version bumped (cache regenerates).
+
 ## 0.2.1
 
 ### Added

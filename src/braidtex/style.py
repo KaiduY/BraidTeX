@@ -108,6 +108,10 @@ class Style:
     sepcolor: str = "gray!70!black"
     # --- little 2-discs ----------------------------------------------------
     discs: str = "none"                  # none | in | out | both
+    # --- strand geometry -----------------------------------------------------
+    geometry: str = "default"            # default | natural
+    tension: float = 1.0                 # natural: 0 = default shapes ... 1 = straightest strings
+    wrap: float = 0.08                   # natural: extra swing (cm) at back-and-forth turns (looser loops)
 
     def __post_init__(self):
         if self.labels not in ("both", "in", "out", "none"):
@@ -125,6 +129,12 @@ class Style:
             raise BraidValidationError("extent must be auto|full|inner")
         if self.discs not in ("none", "in", "out", "both"):
             raise BraidValidationError("discs must be none|in|out|both")
+        if self.geometry not in ("default", "natural"):
+            raise BraidValidationError("geometry must be default|natural")
+        if not (0.0 <= self.tension <= 1.0):
+            raise BraidValidationError("tension must be between 0 and 1")
+        if not (0.0 <= self.wrap <= 1.0):
+            raise BraidValidationError("wrap must be between 0 and 1 cm")
         if not re.fullmatch(r"[A-Za-z0-9 =.,]+", self.sepstyle):
             raise BraidValidationError("sepstyle: only letters, digits, spaces and '=.,' allowed")
         for k in ("band", "lw"):
@@ -162,11 +172,13 @@ class Style:
             kw.update(INLINE_PRESET)
         for k, v in opts.items():
             if k in ("width", "height", "band", "pad", "margin", "gap", "regionpad", "spacing",
-                     "minspan"):
+                     "minspan", "wrap"):
                 kw[k] = parse_length(v, k)
             elif k == "lw":
                 kw[k] = parse_length(v if re.search(r"[a-z]", str(v)) else f"{v}pt", k) / _UNITS["pt"]
-            elif k in ("rho", "wmin"):
+            elif k == "geometry":
+                kw[k] = {"string": "natural", "strings": "natural", "classic": "default"}.get(v, v)
+            elif k in ("rho", "wmin", "tension"):
                 try:
                     kw[k] = float(v)
                 except ValueError:
@@ -194,7 +206,7 @@ class Style:
     def to_dict(self) -> dict:
         d = asdict(self)
         for k in ("lw", "width", "height", "band", "pad", "margin", "gap", "rho", "wmin",
-                  "regionpad", "spacing", "minspan"):
+                  "regionpad", "spacing", "minspan", "tension", "wrap"):
             if d[k] is not None:
                 d[k] = round(float(d[k]), 6)
         for k in ("inpos", "outpos"):

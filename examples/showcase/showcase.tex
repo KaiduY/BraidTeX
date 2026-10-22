@@ -5,7 +5,7 @@
 \setlength{\parindent}{0pt}\setlength{\parskip}{4pt}
 
 \begin{document}
-\section*{BraidTeX 0.2 --- feature showcase}
+\section*{BraidTeX 0.3 --- feature showcase}
 
 \subsection*{1. Crossings, identity, colours}
 Positive $\sigma_1$ (left strand over), negative $\sigma_1^{-1}$, a three-strand word, identities:
@@ -89,7 +89,30 @@ Restyled (own objects, no tensor sign, other associator symbol, node boxes, colo
 Inline: $\sigma_1 = \braid{\bin{a b}\bcr{1}\bset{inline,labels=none}}$ and
 $\mathrm{id}=\braid{\bn{2}\bset{inline}}$ sit on the math axis next to ordinary symbols.
 
-\subsection*{8. Source scanning}
+\subsection*{8. Geometry modes: default snakes vs.\ natural strings}
+Same braids, \texttt{geometry=default} (left of each pair) and \texttt{geometry=natural} (right). In natural
+mode a strand with several crossings in a row is one smooth, nearly straight string; it only bends where it
+has to turn.
+\[
+  \braid{\bin{a b c d}\bcr{1 2 3}}\quad\braid{\bin{a b c d}\bcr{1 2 3}\bset{geometry=natural}}\qquad
+  \braid{\bin{a b c}\bcr{1 2 1 1 2 1}\bset{palette}}\quad\braid{\bin{a b c}\bcr{1 2 1 1 2 1}\bset{palette,geometry=natural}}
+\]
+\[
+  \braid{\bin{a b c d}\bcr{1 2 3 -1 -2 1}\bset{palette}}\quad\braid{\bin{a b c d}\bcr{1 2 3 -1 -2 1}\bset{palette,geometry=natural}}\qquad
+  \braid{\bin{a b c d}\bcr{3 2 1 3 2 3}\bset{palette}}\quad\braid{\bin{a b c d}\bcr{3 2 1 3 2 3}\bset{palette,geometry=natural}}
+\]
+Back-and-forth twists: \texttt{wrap} sets how loosely a string winds around another (0, default, 0.2), and
+\texttt{tension=0.4} relaxes the straightening.
+\[
+  \braid{\bin{a b c}\bcr{1 1 2 2 1 1}\bset{palette,geometry=natural,wrap=0}}\quad\braid{\bin{a b c}\bcr{1 1 2 2 1 1}\bset{palette,geometry=natural}}\quad\braid{\bin{a b c}\bcr{1 1 2 2 1 1}\bset{palette,geometry=natural,wrap=0.2}}\quad\braid{\bin{a b c}\bcr{1 1 2 2 1 1}\bset{palette,geometry=natural,tension=0.4}}
+\]
+Natural mode combines with everything else (composition marks, discs, axes):
+\[
+  \braid{\bin{x y z}\bcr{1 2}\bsub{2}{\bin{a b}\bcr{1 -1}}\bset{geometry=natural,compose=shadow}}\qquad
+  \braid{\bin{((a b) c) d}\bcr{1 2 3}\bset{geometry=natural,discs,width=4.2cm}}
+\]
+
+\subsection*{9. Source scanning}
 \begin{verbatim}
 \braid{\bin{x_1 x_2}\bcr{1}}   % shown literally, never transformed
 \end{verbatim}

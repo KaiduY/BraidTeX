@@ -11,7 +11,7 @@ from .model import Axis, Braid, Crossing, Point
 from .render import render_standalone, render_svg, render_tikz
 from .style import Style
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 __all__ = ["Braid", "Axis", "Point", "Crossing", "Style", "Node", "parse_config", "unlabeled",
            "normalized_positions", "build_geometry", "count_intersections", "render_tikz",

@@ -47,7 +47,7 @@ T(r"""
 \braidsetup{lw=0.9pt}
 
 \title{\textbf{BraidTeX} --- User Manual\\[2pt]\large Braid and little-disc diagrams as ordinary mathematics}
-\author{version 0.2.1}
+\author{version 0.3.0}
 \date{}
 
 \begin{document}
@@ -390,6 +390,7 @@ not scoped by TeX groups). \cs{bset} overrides \cs{braidsetup}. Lengths accept \
 \opt{inpos}, \opt{outpos} & custom normalized endpoint positions, e.g. \opt{inpos=\{0 .2 1\}}\\
 \opt{compose}, \opt{at}, \opt{extent}, \opt{shadowcolor}, \opt{sepstyle}, \opt{sepcolor}, \opt{regionpad} & composition modes (Section~\ref{sec:compose})\\
 \opt{discs} & little-disc nesting (Section~\ref{sec:discs})\\
+\opt{geometry}, \opt{tension}, \opt{wrap} & strand shapes: \opt{default} or \opt{natural} (Section~\ref{sec:geometry})\\
 \opt{inline} / \opt{size=inline} & compact preset for use in running text\\
 \bottomrule\end{longtable}
 \subsection{Examples}
@@ -400,9 +401,61 @@ EX(r"""
 \braid{\bin{a b c}\bset{inpos={0 0.15 1},outpos={0 0.85 1}}\bcr{}}
 """)
 T(r"""
+\subsection{Strand geometry: \opt{default} and \opt{natural}}\label{sec:geometry}
+\cs{bset\{geometry=default|natural\}} (or \cs{braidsetup\{geometry=natural\}} for the whole document) chooses
+how strands are drawn. The braid, its permutation, colours and labels are identical in both modes; only the shape
+of the curves changes.
+\begin{description}[leftmargin=1.2em,itemsep=2pt]
+\item[\opt{default}] every crossing layer is its own S-curve that comes to rest (vertical tangent) at each layer
+ boundary. Very regular and always correct, but a strand with several crossings in a row looks like a snake.
+\item[\opt{natural}] a strand is \emph{one string}: a single smooth curve through all its crossings. If it passes
+ over (or under) several strands in a row it runs in one nearly straight diagonal instead of stopping between
+ crossings; it only bends where it really has to turn (the same strand crossing back, i.e.\ a twist), and it
+ never bends when it does not need to. Bending energy is about 35--40\,\% lower than in the default mode.
+\end{description}
+Natural mode is preferable for long words, many consecutive crossings and pictures that should look like real
+cord; the default mode is preferable for regular, grid-like diagrams (for instance when pictures are compared
+layer by layer, as in the identities of Section~\ref{sec:ident}).
+""")
+EX(r"""
+\braid{\bin{a b c d}\bcr{1 2 3}\bset{geometry=default}} \quad
+\braid{\bin{a b c d}\bcr{1 2 3}\bset{geometry=natural}} \qquad
+\braid{\bin{a b c}\bcr{1 2 1 1 2 1}\bset{palette,geometry=default}} \quad
+\braid{\bin{a b c}\bcr{1 2 1 1 2 1}\bset{palette,geometry=natural}}
+""", r"""
+Left pair: strand $a$ crosses three strands in a row; in natural mode it is a single straight run. Right
+pair: the full twist --- the straight diagonals replace the zig-zag, while the genuine back-and-forth twists
+stay.
+""")
+T(r"""
+\paragraph{Tuning the string.} Two options (natural mode only):
+\begin{center}\small\begin{tabular}{@{}lp{10.6cm}@{}}\toprule
+\opt{tension} (0--1, default 1) & how straight the strings run: 1 = straightest; 0 reproduces the default
+ shapes; values in between mix the two\\
+\opt{wrap} (default 0.08cm) & how far a string swings out when it winds back and forth around another one
+ (the shoelace/knot situation): 0 gives tight, metallic-looking turns, larger values give looser, rounder loops;
+ raise \opt{band} as well for even softer loops\\
+\bottomrule\end{tabular}\end{center}
+""")
+EX(r"""
+\braid{\bin{a b c}\bcr{1 1 2 2 1 1}\bset{palette,geometry=natural,wrap=0}} \quad
+\braid{\bin{a b c}\bcr{1 1 2 2 1 1}\bset{palette,geometry=natural}} \quad
+\braid{\bin{a b c}\bcr{1 1 2 2 1 1}\bset{palette,geometry=natural,wrap=0.2}} \quad
+\braid{\bin{a b c}\bcr{1 1 2 2 1 1}\bset{palette,geometry=natural,tension=0.4}}
+""", r"""
+From left to right: \opt{wrap=0}, the default \opt{wrap}, a loose \opt{wrap=0.2}, and \opt{tension=0.4}.
+""")
+T(r"""
+\paragraph{Safety net.} A natural-mode picture is \emph{checked}: every layer must contain exactly the intended
+crossings, non-crossing strands must keep a visible distance, gaps at crossings must fit, ribbon markings must stay
+clear of their strands. If a setting would violate this (for instance a very narrow diagram with a large
+\opt{wrap}) the tension and wrap are reduced step by step, ending at the default shapes, which are always correct.
+So \opt{natural} can never change the mathematics of a diagram, only its looks.
+""")
+T(r"""
 \paragraph{Document defaults.} For a whole thesis put in the preamble, e.g.
 \opt{\textbackslash braidsetup\{lw=0.8pt, compose=separator, palette\}}; override locally with \cs{bset}.
-\paragraph{Geometry in one paragraph.} Each strand is a chain of cubic B\'ezier curves with vertical tangents at
+\paragraph{Geometry of the default mode in one paragraph.} Each strand is a chain of cubic B\'ezier curves with vertical tangents at
 the layer boundaries (smooth, no kinks; minimum radius of curvature about 1.8\,mm at the default spacing).
 All strands in a layer share the same parametrization, so two strands that do not swap never meet and two that
 swap cross \emph{exactly once}: a diagram always has exactly as many crossings as generators, whatever the

@@ -8,7 +8,7 @@ from .discs import Disc, root_radius
 from .geometry import Bez, Geometry, bez_point, build_geometry
 from .model import Axis, Braid
 
-RENDER_VERSION = "10"
+RENDER_VERSION = "13"
 LABEL_H = 0.5        # cm reserved for an endpoint label row (bbox estimate only)
 
 
