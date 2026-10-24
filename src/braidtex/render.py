@@ -4,11 +4,12 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 from xml.sax.saxutils import escape
 
+from .config import GAP
 from .discs import Disc, root_radius
 from .geometry import Bez, Geometry, bez_point, build_geometry
 from .model import Axis, Braid
 
-RENDER_VERSION = "13"
+RENDER_VERSION = "15"
 LABEL_H = 0.5        # cm reserved for an endpoint label row (bbox estimate only)
 
 
@@ -58,6 +59,8 @@ def braid_content(braid: Braid) -> Tuple[List[str], Geometry, float, float]:
     axis = braid.axis
     if axis is None and (g.discs_in or g.discs_out):
         axis = Axis("h")                      # discs live on the axis
+    gin = {i for i, l in enumerate(braid.source.labels()) if l == GAP}     # gap positions (not endpoints)
+    gout = {i for i, l in enumerate(braid.target.labels()) if l == GAP}
 
     def axes() -> None:
         if axis is None:
@@ -70,8 +73,8 @@ def braid_content(braid: Braid) -> Tuple[List[str], Geometry, float, float]:
             out.append(f"\\draw[dotted,line width={lw}pt] {_p((g.width, g.height))} -- "
                        f"{_p((g.width, 0.0))};%")
         if axis.ticks:
-            xs_top = list(g.in_x) + ([0.0] if axis.kind == "frame" else [])
-            xs_bot = list(g.out_x) + ([0.0] if axis.kind == "frame" else [])
+            xs_top = [x for i, x in enumerate(g.in_x) if i not in gin] + ([0.0] if axis.kind == "frame" else [])
+            xs_bot = [x for i, x in enumerate(g.out_x) if i not in gout] + ([0.0] if axis.kind == "frame" else [])
             for x in xs_top:
                 out.append(f"\\draw[line width={lw}pt] {_p((x, g.height - 0.08))} -- "
                            f"{_p((x, g.height + 0.08))};%")
@@ -99,23 +102,35 @@ def braid_content(braid: Braid) -> Tuple[List[str], Geometry, float, float]:
     # little discs: one stadium per tree node, nested exactly like the parentheses
     for discs, y in ((g.discs_in, g.height), (g.discs_out, 0.0)):
         for d in discs:                       # outermost first
+            if d.gap:
+                continue                  # a gap ("...") is a placeholder, not a disc
             out.append(f"\\draw[color=black!55,line width={lw}pt] {_disc_path(d, y)};%")
         for d in discs:
-            if d.is_leaf:
+            if d.is_leaf and not d.gap:
                 out.append(f"\\fill[color=black!55] {_p((d.left, y))} circle (1.2pt);%")
 
     for s in g.strands:
+        if s.hidden:
+            continue
         for run in s.runs:
             out.append(f"\\draw[color={s.color}] {_path(run)};%")
+        for run in s.dotted_runs:                          # strand inside a gap region
+            out.append(f"\\draw[color={s.color},dotted,line cap=round] {_path(run)};%")
+    for gp in g.gaps:                                      # the dots of "..." (rows aligned)
+        if gp.dots:
+            pts = " ".join(f"{_p(pt)} circle (1.1pt)" for pt in gp.dots)
+            out.append(f"\\fill[color={st.gapcolor}] {pts};%")
     if axis and axis.front:
         axes()
 
     font = f"\\{st.fontsize}"
     if st.dots:
-        for x in g.in_x:
-            out.append(f"\\fill {_p((x, g.height))} circle (1.3pt);%")
-        for x in g.out_x:
-            out.append(f"\\fill {_p((x, 0.0))} circle (1.3pt);%")
+        for i, x in enumerate(g.in_x):
+            if i not in gin:
+                out.append(f"\\fill {_p((x, g.height))} circle (1.3pt);%")
+        for i, x in enumerate(g.out_x):
+            if i not in gout:
+                out.append(f"\\fill {_p((x, 0.0))} circle (1.3pt);%")
     for pt in braid.points:
         x = (g.in_x if pt.side == "in" else g.out_x)[pt.index - 1]
         y = g.height if pt.side == "in" else 0.0
@@ -201,11 +216,20 @@ def render_svg(braid: Braid, key: str = "") -> str:
             out.append(f'<path d="M{pp((g.width, g.height))} L{pp((g.width, 0))}" stroke="black" '
                        f'fill="none" stroke-dasharray="2 3" stroke-width="{lw * 0.7:.2f}"/>')
     for s in g.strands:
+        if s.hidden:
+            continue
         col = _svg_color(s.color)
         for run in s.runs:
             d = f"M{pp(run[0].p0)}" + "".join(f" C{pp(b.c1)} {pp(b.c2)} {pp(b.p3)}" for b in run)
             out.append(f'<path d="{d}" stroke="{col}" fill="none" stroke-width="{lw:.2f}" '
                        f'stroke-linejoin="round"/>')
+        for run in s.dotted_runs:
+            d = f"M{pp(run[0].p0)}" + "".join(f" C{pp(b.c1)} {pp(b.c2)} {pp(b.p3)}" for b in run)
+            out.append(f'<path d="{d}" stroke="{col}" fill="none" stroke-width="{lw:.2f}" '
+                       f'stroke-dasharray="0.1 4" stroke-linecap="round"/>')
+    for gp in g.gaps:
+        for (x, y) in gp.dots:
+            out.append(f'<circle cx="{X(x):.2f}" cy="{Y(y):.2f}" r="1.6" fill="{_svg_color(st.gapcolor)}"/>')
     fs = 13
     if st.show_in:
         for x, lab in zip(g.in_x, braid.display_in()):

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-from .config import Node
+from .config import GAP, Node
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,7 @@ class Disc:
     rho: float         # radius
     depth: int         # root = 0
     is_leaf: bool
+    gap: bool = False  # a gap leaf ("..."): kept for the layout, not drawn
 
     def contains_point(self, x: float, y: float = 0.0, eps: float = 1e-9) -> bool:
         cx = min(max(x, self.left), self.right)
@@ -80,7 +81,7 @@ def disc_layout(tree: Node, xs: Sequence[float], rmax: float = 0.09,
             out.append(Disc(lo, hi, xs[lo], xs[hi], rho, depth, False))
             return h + 1
         rho = _radius(0, lo, hi, depth, parent_rho)
-        out.append(Disc(lo, hi, xs[lo], xs[hi], rho, depth, True))
+        out.append(Disc(lo, hi, xs[lo], xs[hi], rho, depth, True, node.label == GAP))
         return h
 
     def _radius(height: int, lo: int, hi: int, depth: int, parent_rho: float) -> float:

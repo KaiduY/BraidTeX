@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence
 
-from .config import Node
+from .config import GAP, Node
 from .errors import BraidValidationError
 
 
-def gap_weights(node: Node, rho: float = 0.5, wmin: float = 0.15) -> List[float]:
-    """Gap weight between each pair of adjacent leaves (length ``arity - 1``)."""
+def gap_weights(node: Node, rho: float = 0.5, wmin: float = 0.15,
+                gapspan: float = 1.0) -> List[float]:
+    """Spacing weight between each pair of adjacent leaves (length ``arity - 1``).
+    Weights next to a gap leaf ("...") are multiplied by ``gapspan``."""
 
     def rec(n: Node, depth: int) -> List[float]:
         if n.is_leaf:
@@ -28,11 +30,14 @@ def gap_weights(node: Node, rho: float = 0.5, wmin: float = 0.15) -> List[float]
             out.extend(rec(c, depth + 1))
         return out
 
-    return rec(node, 0)
+    w = rec(node, 0)
+    labels = node.labels()
+    return [x * (gapspan if GAP in (labels[i], labels[i + 1]) else 1.0) for i, x in enumerate(w)]
 
 
 def normalized_positions(node: Node, rho: float = 0.5, wmin: float = 0.15,
-                         custom: Optional[Sequence[float]] = None) -> List[float]:
+                         custom: Optional[Sequence[float]] = None,
+                         gapspan: float = 1.0) -> List[float]:
     """Endpoint positions in [0, 1] (a single strand sits at 0.5)."""
     n = node.arity
     if custom is not None:
@@ -48,7 +53,7 @@ def normalized_positions(node: Node, rho: float = 0.5, wmin: float = 0.15,
         return []
     if n == 1:
         return [0.5]
-    gaps = gap_weights(node, rho, wmin)
+    gaps = gap_weights(node, rho, wmin, gapspan)
     total = sum(gaps)
     pos, acc = [0.0], 0.0
     for g in gaps:

@@ -108,6 +108,12 @@ class Style:
     sepcolor: str = "gray!70!black"
     # --- little 2-discs ----------------------------------------------------
     discs: str = "none"                  # none | in | out | both
+    # --- gaps ("...": omitted strands) ---------------------------------------
+    gapdots: int = 3                     # dots per row
+    gaprows: str = "auto"                # auto | number of dot rows (aligned across all gaps)
+    gapthrough: str = "solid"            # strands crossing a gap: solid | dotted
+    gapcolor: str = "black"
+    gapspan: float = 1.0                 # extra width factor next to a gap
     # --- strand geometry -----------------------------------------------------
     geometry: str = "default"            # default | natural
     tension: float = 1.0                 # natural: 0 = default shapes ... 1 = straightest strings
@@ -129,6 +135,15 @@ class Style:
             raise BraidValidationError("extent must be auto|full|inner")
         if self.discs not in ("none", "in", "out", "both"):
             raise BraidValidationError("discs must be none|in|out|both")
+        if not (1 <= self.gapdots <= 9):
+            raise BraidValidationError("gapdots must be between 1 and 9")
+        if not (self.gaprows == "auto" or (self.gaprows.isdigit() and 1 <= int(self.gaprows) <= 40)):
+            raise BraidValidationError("gaprows must be auto or a number between 1 and 40")
+        if self.gapthrough not in ("solid", "dotted"):
+            raise BraidValidationError("gapthrough must be solid|dotted")
+        check_color(self.gapcolor)
+        if not (0.3 <= self.gapspan <= 5):
+            raise BraidValidationError("gapspan must be between 0.3 and 5")
         if self.geometry not in ("default", "natural"):
             raise BraidValidationError("geometry must be default|natural")
         if not (0.0 <= self.tension <= 1.0):
@@ -176,6 +191,18 @@ class Style:
                 kw[k] = parse_length(v, k)
             elif k == "lw":
                 kw[k] = parse_length(v if re.search(r"[a-z]", str(v)) else f"{v}pt", k) / _UNITS["pt"]
+            elif k == "gapdots":
+                try:
+                    kw[k] = int(v)
+                except ValueError:
+                    raise BraidValidationError(f"gapdots: expected an integer, got {v!r}")
+            elif k in ("gaprows", "gapthrough", "gapcolor"):
+                kw[k] = v
+            elif k == "gapspan":
+                try:
+                    kw[k] = float(v)
+                except ValueError:
+                    raise BraidValidationError(f"gapspan: expected a number, got {v!r}")
             elif k == "geometry":
                 kw[k] = {"string": "natural", "strings": "natural", "classic": "default"}.get(v, v)
             elif k in ("rho", "wmin", "tension"):
@@ -206,7 +233,7 @@ class Style:
     def to_dict(self) -> dict:
         d = asdict(self)
         for k in ("lw", "width", "height", "band", "pad", "margin", "gap", "rho", "wmin",
-                  "regionpad", "spacing", "minspan", "tension", "wrap"):
+                  "regionpad", "spacing", "minspan", "tension", "wrap", "gapspan"):
             if d[k] is not None:
                 d[k] = round(float(d[k]), 6)
         for k in ("inpos", "outpos"):

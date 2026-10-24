@@ -5,7 +5,7 @@
 \setlength{\parindent}{0pt}\setlength{\parskip}{4pt}
 
 \begin{document}
-\section*{BraidTeX 0.3 --- feature showcase}
+\section*{BraidTeX 0.4 --- feature showcase}
 
 \subsection*{1. Crossings, identity, colours}
 Positive $\sigma_1$ (left strand over), negative $\sigma_1^{-1}$, a three-strand word, identities:
@@ -112,7 +112,32 @@ Natural mode combines with everything else (composition marks, discs, axes):
   \braid{\bin{((a b) c) d}\bcr{1 2 3}\bset{geometry=natural,discs,width=4.2cm}}
 \]
 
-\subsection*{9. Source scanning}
+\subsection*{9. Large and infinite braids: gaps and unlabeled strands}
+\texttt{...} marks omitted strands (a position like any other), \texttt{*} an unlabeled strand. Dots are aligned
+in rows shared by all gaps and keep clear of strands.
+\[
+  \braid{\bin{x_1 ... x_n}}\quad \braid{\bin{x_1 ... x_n}\bcr{1 2}}\quad
+  \braid{\bin{... x_i x_j ...}\bcr{2}}\quad \braid{\bin{x_1 * y ... z}\bcr{2 3}\bset{palette}}
+\]
+A strand winding around $x_1$ across the dots (solid, dotted, dotted with natural geometry):
+\[
+  \braid{\bin{x_1 ... x_n}\bcr{-2 -1 -1 2}}\quad
+  \braid{\bin{x_1 ... x_n}\bcr{-2 -1 -1 2}\bset{gapthrough=dotted}}\quad
+  \braid{\bin{x_1 ... x_n}\bcr{-2 -1 -1 2}\bset{gapthrough=dotted,geometry=natural}}
+\]
+The middle of a big braid, several gaps (aligned rows), two geometries:
+\[
+  \braid{\bin{... x_1 ... x_i x_j ... x_n ...}\bcr{4 3 2 -2 -3 -4}\bset{palette,gapthrough=dotted}}\quad
+  \braid{\bin{... x_1 ... x_i x_j ... x_n ...}\bcr{4 3 2 -2 -3 -4}\bset{palette,gapthrough=dotted,geometry=natural}}
+\]
+Gaps with discs, axes, a ribbon (shadow) and five dots:
+\[
+  \braid{\bin{(a ... b) c ... d}\bcr{3 4}\bset{discs,width=4.8cm}}\quad
+  \braid{\bin{x y z}\bcr{1 2}\bsub{2}{\bin{a ... b}\bcr{1 2}}\bset{compose=shadow}}\quad
+  \braid{\bin{x * ... * y}\bcr{4 3 2 1}\bset{palette,gapdots=5}}
+\]
+
+\subsection*{10. Source scanning}
 \begin{verbatim}
 \braid{\bin{x_1 x_2}\bcr{1}}   % shown literally, never transformed
 \end{verbatim}

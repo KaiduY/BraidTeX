@@ -47,7 +47,7 @@ T(r"""
 \braidsetup{lw=0.9pt}
 
 \title{\textbf{BraidTeX} --- User Manual\\[2pt]\large Braid and little-disc diagrams as ordinary mathematics}
-\author{version 0.3.0}
+\author{version 0.4.0}
 \date{}
 
 \begin{document}
@@ -214,6 +214,62 @@ EX(r"""
 \paragraph{Labels with parentheses or spaces.} \opt{x\_1}, \opt{V/W}, \opt{X\^{}\{\textbackslash otimes 2\}},
 \opt{\textbackslash frac\{A\}\{B\}}, \opt{x\_\{12\}} are single atoms. Wrap anything ambiguous:
 \opt{\{V(W)\}} or \cs{atom\{f(x, y)\}}. (\opt{\textbackslash frac \{A\} \{B\}} with spaces splits; use \cs{atom}.)
+""")
+T(r"""
+\subsection{Large or infinite braids: gaps (\opt{...}) and unlabeled strands (\opt{*})}\label{sec:gaps}
+A configuration may contain \opt{...} (also \opt{\textbackslash dots}, \opt{\textbackslash cdots},
+\opt{\textbackslash ldots}) wherever any number of further strands are omitted: BraidTeX draws rows of dots there.
+A strand marked \opt{*} is \emph{unlabeled}; labeled and unlabeled strands and gaps can be mixed freely, in
+groups too (\opt{(a ... b) * c}).
+
+\paragraph{A gap is a position.} In words, colours, notes and points a gap counts as \emph{one position}, exactly
+like a strand, because it is an invisible placeholder strand: in \opt{x\_1 ... x\_n} the positions are
+$1,2,3$, so \cs{bcr\{1 2\}} lets $x_1$ pass over the omitted strands (position~2) and then over $x_n$. The output
+configuration follows from the word as always: here \opt{... x\_n x\_1}; a wrong \cs{bout} is an error. Positions of
+gaps cannot carry colours, notes or marked points.
+""")
+EX(r"""
+\braid{\bin{x_1 ... x_n}} \quad \braid{\bin{x_1 ... x_n}\bcr{1 2}} \quad
+\braid{\bin{... x_i x_j ...}\bcr{2}} \quad \braid{\bin{x_1 * y ... z}\bcr{2 3}}
+""", r"""
+In the last diagram the strand $x_1$ and an unlabeled strand are mixed with a gap.
+""")
+T(r"""
+\paragraph{Aligned dots.} The rows of dots are placed at heights shared by \emph{all} gaps of a diagram (so
+they line up), each row is centred on its gap, and every row is moved up or down until no dot comes close to a
+strand. If two gaps appear (for instance the middle of a big braid), their dots are aligned automatically.
+""")
+EX(r"""
+\braid{\bin{... x_1 ... x_i x_j ... x_n ...}\bcr{4 3 2 -2 -3 -4}\bset{palette}}
+""")
+T(r"""
+\paragraph{Strands crossing a gap.} A strand that passes over (or under) the omitted strands is simply a strand
+crossing the gap position. With \opt{gapthrough=solid} (default) it is drawn as usual; with
+\opt{gapthrough=dotted} it turns dotted while it is inside the region of the dots, as if it were one of the
+omitted strands. The dots always keep a distance from every strand. The twist below winds $x_n$ around $x_1$
+across the dots.
+""")
+EX(r"""
+\braid{\bin{x_1 ... x_n}\bcr{-2 -1 -1 2}} \quad
+\braid{\bin{x_1 ... x_n}\bcr{-2 -1 -1 2}\bset{gapthrough=dotted}} \quad
+\braid{\bin{x_1 ... x_n}\bcr{-2 -1 -1 2}\bset{gapthrough=dotted,geometry=natural}}
+""")
+T(r"""
+\begin{center}\small\begin{tabular}{@{}lp{10.5cm}@{}}\toprule
+\opt{gapdots} & dots per row (1--9, default 3)\\
+\opt{gaprows} & \opt{auto} (about one row per 1.5\,cm of height) or a number of rows\\
+\opt{gapthrough} & \opt{solid} or \opt{dotted}: how a strand looks inside a gap region\\
+\opt{gapcolor} & colour of the dots (default black)\\
+\opt{gapspan} & extra width next to a gap (default 1)\\
+\bottomrule\end{tabular}\end{center}
+Gaps work with every other feature: both geometries, shadow/separator marks (a gap inside an inner braid is part
+of the ribbon), discs (a gap has no disc of its own but sits inside the discs of its group), axes (no tick at a
+gap), colours, identities. For a labeled strand that \emph{displays} dots, use \cs{atom\{\textbackslash vdots\}} or
+another spelling that is not \opt{...}/\opt{\textbackslash dots}/\opt{\textbackslash cdots}/\opt{\textbackslash ldots}.
+""")
+EX(r"""
+\braid{\bin{(a ... b) c ... d}\bcr{3 4}\bset{discs,width=5cm}} \qquad
+\braid{\bin{x y z}\bcr{1 2}\bsub{2}{\bin{a ... b}\bcr{1 2}}\bset{compose=shadow}}
 """)
 T(r"""
 \subsection{Axes, marked points, annotations, crossing labels}
@@ -390,6 +446,7 @@ not scoped by TeX groups). \cs{bset} overrides \cs{braidsetup}. Lengths accept \
 \opt{inpos}, \opt{outpos} & custom normalized endpoint positions, e.g. \opt{inpos=\{0 .2 1\}}\\
 \opt{compose}, \opt{at}, \opt{extent}, \opt{shadowcolor}, \opt{sepstyle}, \opt{sepcolor}, \opt{regionpad} & composition modes (Section~\ref{sec:compose})\\
 \opt{discs} & little-disc nesting (Section~\ref{sec:discs})\\
+\opt{gapdots}, \opt{gaprows}, \opt{gapthrough}, \opt{gapcolor}, \opt{gapspan} & gaps / omitted strands (Section~\ref{sec:gaps})\\
 \opt{geometry}, \opt{tension}, \opt{wrap} & strand shapes: \opt{default} or \opt{natural} (Section~\ref{sec:geometry})\\
 \opt{inline} / \opt{size=inline} & compact preset for use in running text\\
 \bottomrule\end{longtable}
@@ -508,6 +565,10 @@ T(r"""
 \item[Warnings about endpoints closer than 2.5\,mm or a gap reaching the end of a layer.] Increase \opt{width}/\opt{band},
  lower the nesting weight (\opt{wmin}), or reduce \opt{gap}.
 \item[``regionpad is too large''.] The shadow/separators would touch a neighbouring strand: reduce \opt{regionpad} or widen the diagram.
+\item[``no room for the dots of the gap''.] The gap is crossed so often that no height is free of strands.
+ Increase \opt{band} or \opt{height}, use \opt{gapdots=1}, or make the gap wider with \opt{gapspan}.
+\item[\cs{bcr} indices are off in a braid with \opt{...}.] A gap counts as a position: in \opt{a ... b} the strand $b$ is position 3.
+\item[``position $k$ is a gap''.] Colours, notes and marked points belong to strands, not to the gap placeholder.
 \item[Dashed separators look cluttered.] \opt{extent=full} draws them along the whole ribbon, across other strands; prefer
  the default, or use \opt{compose=shadow} for long ribbons.
 \item[Pentagon/hexagon too wide.] \opt{scale=0.8}, or put it on its own line.

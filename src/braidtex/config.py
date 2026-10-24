@@ -5,6 +5,8 @@ Grammar (whitespace separates atoms)::
     config := item*
     item   := '(' config ')'          structural grouping (non-empty)
             | '*'                     unlabeled leaf
+            | '...' | '\dots' | '\cdots' | '\ldots'
+                                      gap: stands for any number of omitted strands
             | '\atom{' raw '}'        explicit atom: raw may contain anything balanced
             | token                   atom
     token  := maximal run of characters that are not whitespace or an
@@ -23,6 +25,9 @@ from typing import Iterator, List, Optional, Sequence, Tuple, Union
 
 from .errors import ConfigSyntaxError
 
+GAP = "..."                    # label of a gap leaf (an invisible placeholder slot)
+GAP_TOKENS = {"...", "\\dots", "\\cdots", "\\ldots", "\\dotsc", "\\dotsb", "\\hdots", "\u2026"}
+
 
 @dataclass(frozen=True)
 class Node:
@@ -35,6 +40,10 @@ class Node:
     @staticmethod
     def leaf(label: Optional[str]) -> "Node":
         return Node(label=label, is_leaf=True)
+
+    @property
+    def is_gap(self) -> bool:
+        return self.is_leaf and self.label == GAP
 
     @staticmethod
     def group(children: Sequence["Node"]) -> "Node":
@@ -161,6 +170,8 @@ def _read_atom(s: str, i: int) -> Tuple[int, Node]:
             continue
         i += 1
     raw = s[start:i]
+    if raw in GAP_TOKENS:
+        return i, Node.leaf(GAP)
     return i, Node.leaf(None if raw == "*" else raw)
 
 

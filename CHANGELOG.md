@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+- **Gaps for large or infinite braids.** `...` (also `\dots`, `\cdots`, `\ldots`) in a configuration marks
+  omitted strands. A gap is an invisible placeholder strand occupying one position, so words, permutations,
+  layers, layouts, ribbons, discs and both geometries work unchanged; boundaries are validated (gaps arrive
+  at gaps), and colours/notes/marked points/substitution on a gap are rejected with a clear message.
+- **Dot rows**: drawn at heights shared by *all* gaps (aligned), centred on each gap's own path, moved
+  until every dot keeps a clearance from every strand (smaller pitch as a last resort, per-gap placement and a
+  warning only if nothing fits). Options `gapdots`, `gaprows`, `gapcolor`, `gapspan`.
+- `gapthrough=dotted`: a strand that passes through a gap region is drawn dotted inside it; dot rows keep a larger
+  distance from strands in this mode so a dotted piece is never mistaken for a row.
+- No axis ticks, endpoint markers, labels or leaf discs at gaps; SVG output draws the dots.
+- **Mixed labeled/unlabeled configurations** (`*` is the unlabeled marker) are now covered by tests and
+  documentation: validation, display, composition.
+- 26 new tests (247 total): parsing/roundtrip, permutation and boundary validation with gaps, rejection of
+  decorations, mixed labels, layout, exact crossings with random words in both geometries and both
+  `gapthrough` modes, alignment/centring/clearance of the dots, dotted traversal confined to the region,
+  ribbons/discs/axes with gaps, options, transformer errors.
+- Manual section "Large or infinite braids", showcase section 9, troubleshooting entries.
+
+### Changed
+- Renderer version bumped (cache regenerates).
+
 ## 0.3.0
 
 ### Added

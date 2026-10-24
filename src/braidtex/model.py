@@ -22,7 +22,7 @@ import json
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .config import ConfigLike, Node, collapse, parse_config, replace_leaf, unlabeled
+from .config import GAP, ConfigLike, Node, collapse, parse_config, replace_leaf, unlabeled
 from .errors import BraidValidationError, IncompatibleBoundaryError
 from .style import PALETTE, Style, check_color
 
@@ -84,7 +84,7 @@ def _as_node(c: ConfigLike) -> Optional[Node]:
 def _display(labels: Optional[Sequence[Optional[str]]], n: int, what: str):
     if labels is None:
         return None
-    labs = [None if (l is None or l == "*") else str(l) for l in labels]
+    labs = [None if (l is None or l in ("*", GAP)) else str(l) for l in labels]
     if len(labs) != n:
         raise BraidValidationError(f"{what}: expected {n} display labels, got {len(labs)}")
     return tuple(labs)
@@ -169,16 +169,22 @@ class Braid:
         self.colors: Dict[int, str] = {}
         for k, v in (colors or {}).items():
             self._check_strand(int(k), "color")
+            self._not_gap(int(k), "colour")
             self.colors[int(k)] = check_color(v)
         self.notes: Dict[int, str] = {}
         for k, v in (notes or {}).items():
             self._check_strand(int(k), "note")
+            self._not_gap(int(k), "annotation")
             self.notes[int(k)] = str(v)
         self.points: Tuple[Point, ...] = tuple(points)
         for p in self.points:
             if p.side not in ("in", "out") or not (1 <= p.index <= self.n):
                 raise BraidValidationError(
                     f"point ({p.side}, {p.index}) outside 1..{self.n} / not in|out")
+            leaf = (self.source if p.side == "in" else self.target).labels()[p.index - 1]
+            if leaf == GAP:
+                raise BraidValidationError(
+                    f"point ({p.side}, {p.index}) is on a gap ('...'); gaps are not endpoints")
         self.axis = axis
         self.style = style or Style()
         self.regions: Tuple[Region, ...] = tuple(regions)
@@ -207,6 +213,12 @@ class Braid:
                 raise BraidValidationError(
                     f"generator #{pos} = {g} is invalid for a braid on {self.n} strand(s): "
                     f"indices must satisfy 1 <= |i| <= {max(self.n - 1, 0)}")
+
+    def _not_gap(self, k: int, what: str) -> None:
+        if k in self.gap_ids:
+            raise BraidValidationError(
+                f"{what}: position {k} is a gap ('...'), not a strand; positions count every "
+                f"item of the input configuration, including gaps")
 
     def _check_strand(self, k: int, what: str) -> None:
         if not (1 <= k <= self.n):
@@ -260,6 +272,12 @@ class Braid:
 
     # ------------------------------------------------------------- queries
     @property
+    def gap_ids(self) -> frozenset:
+        """Identities (input positions) of the gap slots (``...``): invisible placeholders
+        for omitted strands.  Every position counts in words, colours and notes."""
+        return frozenset(k for k, l in enumerate(self.source.labels(), 1) if l == GAP)
+
+    @property
     def permutation(self) -> Tuple[int, ...]:
         """``p[k-1]`` = output slot (1-based) reached by strand ``k``."""
         p = [0] * self.n
@@ -288,10 +306,14 @@ class Braid:
         return self.style.color
 
     def display_in(self) -> List[Optional[str]]:
-        return list(self.in_labels) if self.in_labels is not None else self.source.labels()
+        if self.in_labels is not None:
+            return list(self.in_labels)
+        return [None if l == GAP else l for l in self.source.labels()]
 
     def display_out(self) -> List[Optional[str]]:
-        return list(self.out_labels) if self.out_labels is not None else self.target.labels()
+        if self.out_labels is not None:
+            return list(self.out_labels)
+        return [None if l == GAP else l for l in self.target.labels()]
 
     # --------------------------------------------------------- composition
     def compose(self, other: "Braid") -> "Braid":
@@ -324,6 +346,8 @@ class Braid:
         """
         if not (1 <= k <= self.n):
             raise BraidValidationError(f"cannot substitute at strand {k}: braid has {self.n}")
+        if k in self.gap_ids:
+            raise BraidValidationError(f"cannot substitute at position {k}: it is a gap ('...')")
         m = inner.n
         if m < 1:
             raise BraidValidationError("the inner braid needs at least one strand")

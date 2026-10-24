@@ -73,6 +73,157 @@ def _band(x0: float, y0: float, x1: float, y1: float) -> Bez:
     return Bez((x0, y0), (x0, y0 + dy), (x1, y1 - dy), (x1, y1))
 
 
+def _x_at_height(path: List[Bez], y: float) -> float:
+    """x of a y-monotone (downward) piecewise Bezier path at height ``y``."""
+    for sg in path:
+        if sg.p0[1] >= y >= sg.p3[1] - 1e-12:
+            lo, hi = 0.0, 1.0
+            for _ in range(40):
+                mid = (lo + hi) / 2
+                if bez_point(sg, mid)[1] > y:
+                    lo = mid
+                else:
+                    hi = mid
+            return bez_point(sg, (lo + hi) / 2)[0]
+    return path[-1].p3[0] if y < path[-1].p3[1] else path[0].p0[0]
+
+
+def _near_intervals(a: Bez, b: Bez, width: float) -> List[Tuple[float, float]]:
+    """Parameter intervals where ``|x_a(s) - x_b(s)| < width`` (same height for equal s)."""
+    N = 40
+    inside = [abs(bez_point(a, i / N)[0] - bez_point(b, i / N)[0]) < width for i in range(N + 1)]
+
+    def edge(s_out: float, s_in: float) -> float:
+        for _ in range(25):
+            m = (s_out + s_in) / 2
+            if abs(bez_point(a, m)[0] - bez_point(b, m)[0]) < width:
+                s_in = m
+            else:
+                s_out = m
+        return (s_out + s_in) / 2
+
+    out: List[Tuple[float, float]] = []
+    start: Optional[float] = None
+    for i in range(N + 1):
+        if inside[i] and start is None:
+            start = 0.0 if i == 0 else edge((i - 1) / N, i / N)
+        if start is not None and (not inside[i] or i == N):
+            end = 1.0 if (inside[i] and i == N) else edge(i / N, (i - 1) / N)
+            out.append((start, end))
+            start = None
+    return out
+
+
+def _merge(ivs: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    merged: List[List[float]] = []
+    for lo, hi in sorted(ivs):
+        if merged and lo <= merged[-1][1] + 1e-9:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    return [(a, b) for a, b in merged]
+
+
+def _split_runs(segs: List[Bez], cuts: Dict[int, List[Tuple[float, float]]],
+                dots: Dict[int, List[Tuple[float, float]]]):
+    """Solid runs and dotted runs of one strand.  ``cuts``: crossing gaps (nothing drawn);
+    ``dots``: stretches inside a gap region (drawn dotted).  Both keyed by segment index."""
+    solid: List[List[Bez]] = []
+    dotted: List[List[Bez]] = []
+    cur: List[Bez] = []
+    kind = ""
+
+    def flush() -> None:
+        nonlocal cur
+        if cur:
+            (solid if kind == "solid" else dotted).append(cur)
+        cur = []
+
+    for idx, seg in enumerate(segs):
+        cm, dm = _merge(cuts.get(idx, [])), _merge(dots.get(idx, []))
+        pts = sorted({0.0, 1.0} | {x for iv in cm + dm for x in iv})
+        for a, b in zip(pts, pts[1:]):
+            if b - a < 1e-9:
+                continue
+            mid = (a + b) / 2
+            if any(lo <= mid <= hi for lo, hi in cm):
+                flush()
+                kind = ""
+                continue
+            k = "dotted" if any(lo <= mid <= hi for lo, hi in dm) else "solid"
+            if k != kind:
+                flush()
+                kind = k
+            cur.append(seg if (a <= 1e-9 and b >= 1 - 1e-9) else subcurve(seg, a, b))
+    flush()
+    return solid, dotted
+
+
+def _min_dist(px: float, py: float, polys: List[List[Pt]]) -> float:
+    best = 1e9
+    for poly in polys:
+        for i in range(len(poly) - 1):
+            a, b = poly[i], poly[i + 1]
+            if min(a[1], b[1]) - 0.6 > py or max(a[1], b[1]) + 0.6 < py:
+                continue
+            best = min(best, _seg_dist((px, py), a, b))
+    return best
+
+
+def _place_gaps(segs: Dict[int, List[Bez]], strands: List["StrandGeom"], gap_set, pitch: Dict[int, float],
+                hw: Dict[int, float], H: float, st) -> Tuple[List[GapGeom], List[float]]:
+    """Dot rows for all gaps.  Rows are shared by every gap (so they are aligned), each row is
+    centred on its gap's own (invisible) path, and a row is moved up or down until no dot comes
+    close to any strand; rows that cannot be placed are dropped (with a smaller dot pitch as a
+    last resort).  Raises no error: if nothing fits, the gap is left empty and a warning issued."""
+    gaps = [GapGeom(k, pitch[k], hw[k]) for k in sorted(gap_set)]
+    polys = [polyline(s, 24) for s in strands if s.ident not in gap_set]
+    # dotted strands look like dots themselves: keep the rows further away from them
+    need = (0.2 if st.gapthrough == "dotted" else 0.115) + st.lw * PT_CM / 2
+    m = st.gapdots
+
+    def dots_at(gp: GapGeom, y: float, scale: float):
+        x0 = _x_at_height(segs[gp.ident], y)
+        return [(x0 + (j - (m - 1) / 2) * gp.pitch * scale, y) for j in range(m)]
+
+    def clear(gp: GapGeom, y: float, scale: float) -> bool:
+        return all(_min_dist(px, py, polys) >= need for px, py in dots_at(gp, y, scale))
+
+    rows_n = int(st.gaprows) if st.gaprows != "auto" else max(1, round(H / 1.5))
+    ideal = [H * (r + 0.5) / rows_n for r in range(rows_n)]
+    win = 0.35 * H / rows_n
+    offsets = [0.0]
+    d = 0.04
+    while d <= win + 1e-9:
+        offsets += [d, -d]
+        d += 0.04
+    lo_y, hi_y = min(0.12, H / 4), H - min(0.12, H / 4)
+
+    for scale in (1.0, 0.75, 0.5):
+        rows: List[float] = []
+        for y0 in ideal:
+            for dl in offsets:
+                y = y0 + dl
+                if lo_y <= y <= hi_y and all(clear(gp, y, scale) for gp in gaps):
+                    rows.append(y)
+                    break
+        if rows:
+            for gp in gaps:
+                gp.dots = [pt for y in rows for pt in dots_at(gp, y, scale)]
+            return gaps, rows
+    # no common height: place each gap's row independently (unaligned) rather than drop it
+    for gp in gaps:
+        for dl in sorted((i * 0.04 for i in range(-int(H / 0.04), int(H / 0.04) + 1)), key=abs):
+            y = H / 2 + dl
+            if lo_y <= y <= hi_y and clear(gp, y, 0.5):
+                gp.dots = dots_at(gp, y, 0.5)
+                break
+        else:
+            warnings.warn(f"no room for the dots of the gap at position {gp.ident}; "
+                          f"increase band, width or spacing", stacklevel=3)
+    return gaps, []
+
+
 def _hermite_bez(x0: float, y0: float, x1: float, y1: float, m0: float, m1: float) -> Bez:
     """Cubic curve from (x0,y0) to (x1,y1) (y decreasing) with slopes ``m = dx/d(depth)``
     at both ends.  Equal slopes on both sides of a level make the join G1."""
@@ -138,7 +289,18 @@ class StrandGeom:
     ident: int
     color: str
     segments: List[Bez]            # complete path: top stub, bands, bottom stub
-    runs: List[List[Bez]] = field(default_factory=list)   # drawable pieces after gaps
+    runs: List[List[Bez]] = field(default_factory=list)   # solid pieces (after crossing gaps)
+    dotted_runs: List[List[Bez]] = field(default_factory=list)  # pieces drawn dotted (in a gap)
+    hidden: bool = False           # a gap slot ("..."): never drawn as a line
+
+
+@dataclass
+class GapGeom:
+    """A gap ("...") region: dot centres, aligned in rows shared by all gaps."""
+    ident: int
+    pitch: float
+    halfwidth: float               # half-width of the region (used for dotted traversal)
+    dots: List[Tuple[float, float]] = field(default_factory=list)
 
 
 @dataclass
@@ -165,6 +327,8 @@ class Geometry:
     discs_out: List[Disc] = field(default_factory=list)
     pad_top: float = 0.0
     pad_bottom: float = 0.0
+    gaps: List[GapGeom] = field(default_factory=list)
+    gap_rows: List[float] = field(default_factory=list)
 
 
 def default_width(n: int, margin: float, spacing: float = 0.9, minspan: float = 1.2) -> float:
@@ -199,7 +363,7 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
         raise ValueError("diagram too small: width <= 2*margin")
 
     def xs(tree, custom):
-        u = normalized_positions(tree, st.rho, st.wmin, custom)
+        u = normalized_positions(tree, st.rho, st.wmin, custom, st.gapspan)
         return [st.margin + p * (W - 2 * st.margin) for p in u]
 
     in_x, out_x = xs(braid.source, st.inpos), xs(braid.target, st.outpos)
@@ -245,6 +409,22 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
     if not layers:
         levels.append(list(levels[0]))
 
+    gap_set = braid.gap_ids
+    pitch: Dict[int, float] = {}
+    hw: Dict[int, float] = {}
+    for gid in gap_set:                       # dot pitch from the space next to each gap
+        dmin = 1e9
+        for t in range(B + 1):
+            j = levels[t].index(gid)
+            for jj in (j - 1, j + 1):
+                if 0 <= jj < n and levels[t][jj] not in gap_set:
+                    dmin = min(dmin, abs(x_at(t, j) - x_at(t, jj)))
+        dmin = 1.0 if dmin > 1e8 else dmin
+        pitch[gid] = min(0.18, 0.32 * dmin)
+        hw[gid] = (st.gapdots - 1) / 2 * pitch[gid] + 0.12
+        if pitch[gid] < 0.07:
+            warnings.warn(f"the gap at position {gid} is very narrow; increase width or spacing "
+                          f"(or gapspan)", stacklevel=3)
     knots: Dict[int, List[float]] = {}
     slopes: Dict[int, List[float]] = {}
     if natural:
@@ -258,6 +438,7 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
     xings: List[CrossingGeom] = []
     ok = True
     cuts: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
+    dot_iv: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
     clearance = st.gap + st.lw * PT_CM
     for t in range(1, B + 1):
         curves: Dict[int, Bez] = {}
@@ -273,6 +454,13 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
             if strict:
                 return None, False
             ok = False
+        if gap_set and st.gapthrough == "dotted":     # a strand inside a gap region is dotted
+            for gid in gap_set:
+                for k in range(1, n + 1):
+                    if k not in gap_set:
+                        ivs = _near_intervals(curves[k], curves[gid], hw[gid])
+                        if ivs:
+                            dot_iv.setdefault((k, t), []).extend(ivs)
         layer = layers[t - 1] if layers else ()
         for cr in layer:
             ov, un = curves[cr.over], curves[cr.under]
@@ -286,6 +474,10 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
                 else:
                     hi = mid
             s_star = (lo + hi) / 2
+            if cr.over in gap_set or cr.under in gap_set:   # passing a gap: nothing to cut
+                xings.append(CrossingGeom(t, bez_point(ov, s_star), cr.over, cr.under, cr.sign,
+                                          cr.generator, (0.0, 0.0), False))
+                continue
             poly = [bez_point(ov, i / 120) for i in range(121)]
 
             def d(s: float, un=un, poly=poly) -> float:
@@ -317,32 +509,17 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
     for k in range(1, n + 1):
         px = out_x[braid.permutation[k - 1] - 1]
         segs[k].append(_line((px, ys[B]), (px, 0.0)))
-        runs: List[List[Bez]] = []
-        cur: List[Bez] = []
-        for idx, seg in enumerate(segs[k]):
-            ivs = sorted(cuts.get((k, idx), []))
-            if not ivs:
-                cur.append(seg)
-                continue
-            merged: List[List[float]] = []
-            for lo, hi in ivs:                       # merge overlapping gaps
-                if merged and lo <= merged[-1][1] + 1e-9:
-                    merged[-1][1] = max(merged[-1][1], hi)
-                else:
-                    merged.append([lo, hi])
-            prev = 0.0
-            for lo, hi in merged:
-                if lo > prev + 1e-9:
-                    cur.append(subcurve(seg, prev, lo))
-                if cur:
-                    runs.append(cur)
-                cur = []
-                prev = hi
-            if prev < 1 - 1e-9:
-                cur.append(subcurve(seg, prev, 1.0))
-        if cur:
-            runs.append(cur)
-        strands.append(StrandGeom(k, braid.strand_color(k), segs[k], runs))
+        if k in gap_set:
+            strands.append(StrandGeom(k, st.gapcolor, segs[k], [], [], True))
+            continue
+        kc = {idx: v for (kk, idx), v in cuts.items() if kk == k}
+        kd = {idx: v for (kk, idx), v in dot_iv.items() if kk == k}
+        solid, dotted = _split_runs(segs[k], kc, kd)
+        strands.append(StrandGeom(k, braid.strand_color(k), segs[k], solid, dotted, False))
+    gap_geoms: List[GapGeom] = []
+    gap_rows: List[float] = []
+    if gap_set:
+        gap_geoms, gap_rows = _place_gaps(segs, strands, gap_set, pitch, hw, H, st)
 
     regions, rok = _regions(braid, levels, x_at, ys, H, B, st, natural, tau, wrap, bh, segs)
     if natural and not rok:
@@ -350,7 +527,7 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
             return None, False
         ok = False
     return Geometry(W, H, in_x, out_x, strands, xings, ys, B, regions, d_in, d_out,
-                    pad_top, pad_bot), ok
+                    pad_top, pad_bot, gap_geoms, gap_rows), ok
 
 
 def _layer_ok(curves: Dict[int, Bez], prev: List[int], nxt: List[int], width: float) -> bool:
