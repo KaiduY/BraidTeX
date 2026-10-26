@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Tuple
 from .cache import Cache
 from .config import ConfigSyntaxError, Node, parse_config
 from .errors import BraidTeXError, BraidValidationError, TransformError
-from .model import Axis, Braid, Point
+from .model import SURFACES, Axis, Braid, Point
 from .style import Style, check_color, split_options
 
 VERBATIM_ENVS = {"verbatim", "verbatim*", "Verbatim", "lstlisting", "minted", "comment",
@@ -139,6 +139,22 @@ def _ints(text: str, base: int, src: Source, what: str) -> List[Tuple[int, int]]
     return out
 
 
+_GEN = re.compile(r"[+-]?(?:\d+|[ab]\d+)$")
+
+
+def _gens(text: str, base: int, src: Source, what: str) -> List[Tuple[object, int]]:
+    """Crossing word: integers (sigma_i, negative = inverse) and torus loops ``a3`` / ``-b2``."""
+    out = []
+    for m in re.finditer(r"\S+", text.replace(",", " ")):
+        tok = m.group()
+        if not _GEN.match(tok):
+            raise src.err(f"{what}: {tok!r} is not a generator; use integers (1, -2, ...) and, on "
+                          f"the torus, loops such as a1, -b2", base + m.start())
+        body = tok.lstrip("+-")
+        out.append((int(tok) if body.isdigit() else tok, base + m.start()))
+    return out
+
+
 def parse_body(m: str, a: int, b: int, defaults: Dict[str, str], src: Source,
                at: int, inner: bool = False) -> Braid:
     """Parse the interior ``m[a:b]`` of ``\\braid{...}`` into a validated Braid."""
@@ -206,7 +222,7 @@ def parse_body(m: str, a: int, b: int, defaults: Dict[str, str], src: Source,
                     raise src.err("\\bn expects one non-negative integer", cmd_at)
                 n_decl = (v[0][0], cmd_at)
             elif name == "bcr":
-                gens.extend(_ints(args[0][0], args[0][1], src, "\\bcr"))
+                gens.extend(_gens(args[0][0], args[0][1], src, "\\bcr"))
             elif name == "bcol":
                 color = args[1][0].strip()
                 check_color(color)
@@ -232,8 +248,8 @@ def parse_body(m: str, a: int, b: int, defaults: Dict[str, str], src: Source,
                 points.append(Point(side, k, args[2][0].strip() or None))
             elif name == "bax":
                 flags = [f.strip() for f in args[0][0].split(",") if f.strip()] or ["h"]
-                kind = "frame" if "frame" in flags else "h"
-                bad = set(flags) - {"h", "frame", "front", "noticks"}
+                kind = next((k for k in ("frame", "torus", "sphere", "none") if k in flags), "h")
+                bad = set(flags) - {"h", "frame", "torus", "sphere", "none", "front", "noticks"}
                 if bad:
                     raise src.err(f"\\bax: unknown flag(s) {sorted(bad)}", cmd_at)
                 axis = Axis(kind, "front" in flags, "noticks" not in flags)
@@ -252,12 +268,16 @@ def parse_body(m: str, a: int, b: int, defaults: Dict[str, str], src: Source,
             raise src.err(str(e), cmd_at)
 
     try:
+        surface = opts.pop("surface", "plane")
+        if surface not in SURFACES:
+            raise BraidValidationError(f"surface must be one of {', '.join(SURFACES)}, got {surface!r}")
         style = Style.from_options(opts)
         braid = Braid([g for g, _ in gens],
                       cfg_in[0] if cfg_in else None, cfg_out[0] if cfg_out else None,
                       n=n_decl[0] if n_decl else None, colors=colors, notes=notes,
                       points=points, axis=axis, style=style,
-                      in_labels=labels.get("in"), out_labels=labels.get("out"))
+                      in_labels=labels.get("in"), out_labels=labels.get("out"),
+                      surface=surface)
     except BraidValidationError as e:
         off = at
         mm = re.search(r"generator #(\d+)", str(e))
@@ -349,7 +369,10 @@ def transform_text(text: str, name: str = "<expr>", cache: Optional[Cache] = Non
         if mt.group(1):                                   # \braidsetup
             try:
                 defaults.update(split_options(m[j + 1:end]))
-                Style.from_options(defaults)
+                Style.from_options({k: v for k, v in defaults.items() if k != "surface"})
+                if defaults.get("surface", "plane") not in SURFACES:
+                    raise BraidValidationError(
+                        f"surface must be one of {', '.join(SURFACES)}, got {defaults['surface']!r}")
             except BraidValidationError as e:
                 raise src.err(str(e), j)
             continue                                      # stays in the source (no-op macro)

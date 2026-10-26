@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+- **Surface braid groups: sphere and torus.** `surface=plane|sphere|torus` (per braid or `\braidsetup`).
+  - *Sphere*: Artin generators + the surface relation; frame with dashed arcs through infinity and an `S^2` tag.
+  - *Torus*: loops `a<i>` / `b<i>` (and inverses `-a<i>`, `-b<i>`) in `\bcr` and in Python (`Loop`, or strings);
+    frame with edge-identification chevrons and a `T^2` tag; `a`-loops pass in front of everything and leave/enter
+    through the identified edges (two layers, arrowheads, label), `b`-loops are rings (one layer).
+  - Works with colours, labels, gaps, both geometries, ribbons (`\bsub`: planar inner braid into a surface braid;
+    loops of other strands sweep over the ribbon), axes (`\bax{torus|sphere|none}`), `looplabels`, `surfacelabel`.
+- **Little discs on surfaces**: sphere = dashed root disc marked infinity (cyclic structure), torus = no root disc
+  (module structure); inner braids must be planar.
+- **Relation macros**: `\braidid{sphere}`, `sphere-twist`, `torus-r1`, `torus-r2`, `torus-r4`, `torus-tr`,
+  `torus-conj` (options `n`, `loop`, `labels`, `colors`, `rel`).
+- **`braidtex.surface`: an independent motion model** of the torus (points on R^2/Z^2): lifted end points and, for
+  every pair, the class of the relative path in R^2 minus lattice (ray-crossing words). It confirmed that all relations
+  of Bellingeri's presentation hold for the drawn conventions (4 of 32 conventions do, the drawn one among them),
+  rejects wrong relations, and gave `a_2 = s_1^-1 a_1 s_1`, `b_2 = (a_1^-1 s_1) b_1 (...)^-1`.
+- `docs/surfaces.md`: literature, the diagram-language decisions, little-discs extension, limits, roadmap.
+- 38 new tests, 285 in total (surface algebra, negative controls, model, geometry for random torus words in both geometries,
+  drawing, identities, transformer, cache); manual chapter and showcase section.
+
+### Changed
+- Words may contain loop generators (`Braid.word` items are ints or `Loop`); `Braid.n_projected_crossings` is the
+  number of crossings in the picture (sigma crossings + `n-1` per `a`-loop).
+- Geometry works on *geometry layers* (an `a`-loop is two); seam jumps are handled in analysis helpers
+  (`polyline`, `polylines`, `count_intersections`, `max_join_error`). Renderer version bumped.
+
+### Known limits
+- Only genus 0 and 1; no cabling of loops of a whole ribbon; surface equality is refuted by the model, not decided;
+  SVG omits frames and marks; the sphere relation and `Delta^2 = Delta^-2` are classical statements (not machine-checked).
 ## 0.4.0
 
 ### Added

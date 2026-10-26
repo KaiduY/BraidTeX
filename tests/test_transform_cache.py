@@ -60,7 +60,7 @@ def test_braidsetup_affects_key_and_is_global(tmp_path):
     ("x\n\\braid{\\bin{a b}\\bcr{1}\\bcr{5}}", "generator #2 = 5", 2),
     ("\\braid{\\bin{a b}\\bout{a b}\\bcr{1}}", "output endpoint 1", 1),
     ("\\braid{\\bin{(a b}}", "missing", 1),
-    ("\\braid{\\bcr{x}}", "not an integer", 1),
+    ("\\braid{\\bcr{x}}", "not a generator", 1),
     ("\\braid{\\foo{1}}", "unknown command \\foo", 1),
     ("\\braid{\\bcr{1}", "unbalanced", 1),
     ("a\n\n\\braid \\bcr{1}", "must be followed", 3),

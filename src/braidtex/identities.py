@@ -36,8 +36,10 @@ from .style import Style, check_color, parse_length
 
 TIKZ_OPT = re.compile(r"^[A-Za-z0-9 =.,!_:/<>\-]*$")
 BRAID_SCENES = {"ybe", "far", "inverse", "crossings", "assoc"}
+SURFACE_SCENES = {"sphere", "sphere-twist", "torus-conj", "torus-r1", "torus-r2", "torus-r4",
+                  "torus-tr"}
 GRAPH_SCENES = {"pentagon", "hexagon"}
-NAMES = sorted(BRAID_SCENES | GRAPH_SCENES)
+NAMES = sorted(BRAID_SCENES | GRAPH_SCENES | SURFACE_SCENES)
 
 
 class Scene:
@@ -89,9 +91,9 @@ def _make_scene(name: str, opts: Dict[str, str], defaults: Dict[str, str]) -> Sc
     opts = dict(opts)
     if name in GRAPH_SCENES:
         return _graph_scene(name, opts)
-    own_keys = ("labels", "colors", "sign", "rel", "gap")
+    own_keys = ("labels", "colors", "sign", "rel", "gap", "n", "loop")
     own = {k: opts.pop(k) for k in own_keys if k in opts}
-    style_opts = dict(defaults)
+    style_opts = {k: v for k, v in defaults.items() if k != "surface"}
     style_opts.update(opts)
     if name == "assoc":
         style_opts.setdefault("discs", "both")
@@ -105,6 +107,8 @@ def _make_scene(name: str, opts: Dict[str, str], defaults: Dict[str, str]) -> Sc
     spec = {"own": own, "style": style.to_dict()}
 
     def build(key: str) -> str:
+        if name in SURFACE_SCENES:
+            return _surface_scene(name, own, style, gap, rel, key)
         n_by = {"ybe": 3, "far": 4, "inverse": 2, "crossings": 2, "assoc": 3}[name]
         labs = _names(own.get("labels"), "a b c d"[:2 * n_by - 1], n_by)
         cols = _colors(own.get("colors"), n_by)
@@ -131,6 +135,53 @@ def _make_scene(name: str, opts: Dict[str, str], defaults: Dict[str, str]) -> Sc
         return _compose(pieces, gap, key, style.lw)
 
     return Scene(name, spec, build)
+
+
+def _surface_scene(name: str, own: Dict[str, str], style: Style, gap: float, rel: str,
+                   key: str = "") -> str:
+    """Relations of the surface braid groups (Bellingeri 2004; Fadell-Van Buskirk 1962), with the
+    words taken from :mod:`braidtex.surface` - the same words the motion-model tests verify."""
+    from . import surface as sf
+    loop = own.get("loop", "a")
+    if loop not in ("a", "b"):
+        raise BraidValidationError("loop must be a or b")
+    default_n = {"sphere": 3, "sphere-twist": 3, "torus-conj": 2, "torus-r1": 3, "torus-r2": 2,
+                 "torus-r4": 2, "torus-tr": 2}[name]
+    try:
+        n = int(own.get("n", default_n))
+    except ValueError:
+        raise BraidValidationError("n must be an integer")
+    lo = {"torus-r1": 3, "sphere": 2, "sphere-twist": 2}.get(name, 2)
+    if not (lo <= n <= 5):
+        raise BraidValidationError(f"{name}: n must be between {lo} and 5")
+    labs = _names(own.get("labels"), " ".join(str(k) for k in range(1, n + 1)), n)  # not a, b: loops
+    cols = _colors(own.get("colors"), n)
+    surf = "sphere" if name.startswith("sphere") else "torus"
+    if name == "sphere":                       # sigma_1 ... sigma_{n-1}^2 ... sigma_1 = 1
+        lhs = [str(k) for k in range(1, n)] + [str(n - 1)] + [str(k) for k in range(n - 2, 0, -1)]
+        rhs: List[str] = []
+        words = [lhs, rhs]
+    elif name == "sphere-twist":               # the full twist has order 2: D^2 = D^-2
+        d2 = [str(k) for k in range(1, n)] * n
+        words = [d2, sf.inv(d2)]
+    elif name == "torus-conj":                 # the loop of position 2 is a conjugate of that of position 1
+        words = [[loop + "2"], ["-1", "a1", "1"] if loop == "a" else ["-a1", "1", "b1", "-1", "a1"]]
+    elif name == "torus-r1":
+        words = list(sf.relations(n)[f"R1 {loop} s2"])
+    elif name == "torus-r2":
+        words = list(sf.relations(n)[f"R2 {loop}"])
+    elif name == "torus-r4":
+        words = list(sf.relations(n)["R4"])
+    else:                                      # torus-tr
+        words = list(sf.relations(n)["TR"])
+    pieces: list = []
+    src = " ".join(labs)
+    for k, w in enumerate(words):
+        if k:
+            pieces.append(f"${rel}$")
+        pieces.append(Braid([int(t) if t.lstrip("-").isdigit() else t for t in w], src,
+                            colors=cols, style=style, surface=surf))
+    return _compose(pieces, gap, key, style.lw)
 
 
 def _compose(pieces, gap: float, key: str, lw: float) -> str:

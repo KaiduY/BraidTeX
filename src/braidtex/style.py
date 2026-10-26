@@ -114,6 +114,9 @@ class Style:
     gapthrough: str = "solid"            # strands crossing a gap: solid | dotted
     gapcolor: str = "black"
     gapspan: float = 1.0                 # extra width factor next to a gap
+    # --- surfaces ------------------------------------------------------------
+    surfacelabel: bool = True            # small "S^2" / "T^2" tag next to the frame
+    looplabels: bool = True              # tiny "a" / "b" next to torus loops
     # --- strand geometry -----------------------------------------------------
     geometry: str = "default"            # default | natural
     tension: float = 1.0                 # natural: 0 = default shapes ... 1 = straightest strings
@@ -210,7 +213,7 @@ class Style:
                     kw[k] = float(v)
                 except ValueError:
                     raise BraidValidationError(f"{k}: expected a number, got {v!r}")
-            elif k in ("dots", "sigma", "palette"):
+            elif k in ("dots", "sigma", "palette", "surfacelabel", "looplabels"):
                 kw[k] = parse_bool(v)
             elif k in ("labels", "fontsize", "color", "at", "extent", "shadowcolor",
                        "sepcolor", "sepstyle"):

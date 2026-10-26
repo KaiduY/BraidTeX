@@ -5,7 +5,7 @@
 \setlength{\parindent}{0pt}\setlength{\parskip}{4pt}
 
 \begin{document}
-\section*{BraidTeX 0.4 --- feature showcase}
+\section*{BraidTeX 0.5 --- feature showcase}
 
 \subsection*{1. Crossings, identity, colours}
 Positive $\sigma_1$ (left strand over), negative $\sigma_1^{-1}$, a three-strand word, identities:
@@ -137,7 +137,37 @@ Gaps with discs, axes, a ribbon (shadow) and five dots:
   \braid{\bin{x * ... * y}\bcr{4 3 2 1}\bset{palette,gapdots=5}}
 \]
 
-\subsection*{10. Source scanning}
+\subsection*{10. Braids on the sphere and the torus}
+\texttt{surface=sphere|torus} names the group. Sphere: the axes close through $\infty$ (no new generators, one new
+relation). Torus: identified edges (chevrons), loops \texttt{a$i$} (round the horizontal cycle, in front of everything)
+and \texttt{b$i$} (round the depth cycle, a ring), inverses with a minus sign.
+\[
+  \braid{\bin{1 2 3}\bcr{1 2}\bset{surface=sphere}}\quad
+  \braid{\bin{1 2 3}\bcr{1 2}\bset{surface=torus}}\quad
+  \braid{\bin{1 2 3}\bcr{a1}\bset{surface=torus}}
+\]
+\[
+  \braid{\bin{1 2 3}\bcr{-a2}\bset{surface=torus}}\quad
+  \braid{\bin{1 2 3}\bcr{b2}\bset{surface=torus}}\quad
+  \braid{\bin{1 2 3}\bcr{-b1 a3}\bset{surface=torus,palette}}
+\]
+A longer torus word, both geometries, with colours, a gap and a ribbon (module insertion of a planar braid):
+\[
+  \braid{\bin{x y z}\bcr{1 a2 -1 b3 -a1}\bset{surface=torus,palette}}\quad
+  \braid{\bin{x y z}\bcr{1 a2 -1 b3 -a1}\bset{surface=torus,palette,geometry=natural}}\quad
+  \braid{\bin{x y z}\bcr{1 a3}\bsub{2}{\bin{p q}\bcr{1}}\bset{surface=torus,compose=shadow}}
+\]
+Little discs: dashed root disc with $\infty$ on the sphere, no root disc on the torus.
+\[
+  \braid{\bin{(1 2) 3}\bcr{1 2}\bset{surface=sphere,discs,width=3.6cm}}\quad
+  \braid{\bin{(1 2) 3}\bcr{2 a1}\bset{surface=torus,discs,width=3.6cm}}
+\]
+The relations, drawn from the verified words: the surface relation of the sphere, the conjugation formulas,
+the relation R4 and the torus relation TR.
+\[ \braidid{sphere}{} \qquad \braidid{torus-conj}{} \]
+\[ \braidid{torus-r4}{} \qquad \braidid{torus-tr}{} \]
+
+\subsection*{11. Source scanning}
 \begin{verbatim}
 \braid{\bin{x_1 x_2}\bcr{1}}   % shown literally, never transformed
 \end{verbatim}

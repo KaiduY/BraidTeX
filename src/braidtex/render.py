@@ -1,6 +1,7 @@
 """Rendering backends.  All consume the same Geometry; none adds semantics."""
 from __future__ import annotations
 
+import math
 from typing import List, Optional, Tuple
 from xml.sax.saxutils import escape
 
@@ -9,7 +10,7 @@ from .discs import Disc, root_radius
 from .geometry import Bez, Geometry, bez_point, build_geometry
 from .model import Axis, Braid
 
-RENDER_VERSION = "15"
+RENDER_VERSION = "19"
 LABEL_H = 0.5        # cm reserved for an endpoint label row (bbox estimate only)
 
 
@@ -31,8 +32,10 @@ def _vbounds(braid: Braid, g: Geometry) -> Tuple[float, float]:
     bot = -(LABEL_H if braid.style.show_out and any(braid.display_out()) else 0)
     top += root_radius(g.discs_in)
     bot -= root_radius(g.discs_out)
-    if braid.axis or g.discs_in or g.discs_out:
+    if braid.axis or g.discs_in or g.discs_out or braid.surface != "plane":
         top, bot = max(top, g.height + 0.12), min(bot, -0.12)
+    if braid.surface == "sphere" and not (g.discs_in or g.discs_out):
+        top, bot = max(top, g.height + 0.8), min(bot, -0.8)      # the dashed arcs through infinity
     return bot, top
 
 
@@ -57,24 +60,50 @@ def braid_content(braid: Braid) -> Tuple[List[str], Geometry, float, float]:
     out: List[str] = []
     lw = _f(st.lw * 0.7)
     axis = braid.axis
-    if axis is None and (g.discs_in or g.discs_out):
+    if axis is None and braid.surface in ("torus", "sphere"):
+        axis = Axis(braid.surface)            # the frame says which surface the strands live on
+    elif axis is None and (g.discs_in or g.discs_out):
         axis = Axis("h")                      # discs live on the axis
     gin = {i for i, l in enumerate(braid.source.labels()) if l == GAP}     # gap positions (not endpoints)
     gout = {i for i, l in enumerate(braid.target.labels()) if l == GAP}
 
+    def chevrons(x: float, y: float) -> None:
+        """Edge-identification mark of the polygon notation: two chevrons pointing down."""
+        for dy in (-0.06, 0.1):
+            out.append(f"\\draw[line width={lw}pt] {_p((x - 0.07, y + dy - 0.09))} -- "
+                       f"{_p((x, y + dy))} -- {_p((x + 0.07, y + dy - 0.09))};%")
+
     def axes() -> None:
-        if axis is None:
+        if axis is None or axis.kind == "none":
             return
-        right = g.width + 0.3
-        for y in (g.height, 0.0):
-            out.append(f"\\draw[->,line width={lw}pt] {_p((0.0, y))} -- {_p((right, y))};%")
-        if axis.kind == "frame":
-            out.append(f"\\draw[->,line width={lw}pt] {_p((0.0, g.height))} -- {_p((0.0, 0.0))};%")
-            out.append(f"\\draw[dotted,line width={lw}pt] {_p((g.width, g.height))} -- "
-                       f"{_p((g.width, 0.0))};%")
+        if axis.kind == "torus":              # x is cyclic: the side edges are identified
+            for y in (g.height, 0.0):
+                out.append(f"\\draw[line width={lw}pt] {_p((0.0, y))} -- {_p((g.width, y))};%")
+            for x in (0.0, g.width):
+                out.append(f"\\draw[line width={lw}pt] {_p((x, g.height))} -- {_p((x, 0.0))};%")
+                chevrons(x, g.height - max(g.pad_top / 2, 0.17))   # in the top stub: no seam reaches it
+        elif axis.kind == "sphere":           # the axis closes up through the point at infinity
+            x0, x1 = -0.12, g.width + 0.12
+            for y, sgn, has_discs in ((g.height, 1, bool(g.discs_in)), (0.0, -1, bool(g.discs_out))):
+                out.append(f"\\draw[line width={lw}pt] {_p((x0, y))} -- {_p((x1, y))};%")
+                if not has_discs:             # (with discs, the dashed root disc is the circle)
+                    h = 1.0 * sgn
+                    out.append(f"\\draw[dashed,line width={lw}pt] {_p((x0, y))} .. controls "
+                               f"{_p((x0, y + h))} and {_p((x1, y + h))} .. {_p((x1, y))};%")
+                    out.append(f"\\node[fill=white,inner sep=1pt,font=\\scriptsize] at "
+                               f"{_p(((x0 + x1) / 2, y + 0.75 * h))} {{$\\infty$}};%")
+        else:
+            right = g.width + 0.3
+            for y in (g.height, 0.0):
+                out.append(f"\\draw[->,line width={lw}pt] {_p((0.0, y))} -- {_p((right, y))};%")
+            if axis.kind == "frame":
+                out.append(f"\\draw[->,line width={lw}pt] {_p((0.0, g.height))} -- {_p((0.0, 0.0))};%")
+                out.append(f"\\draw[dotted,line width={lw}pt] {_p((g.width, g.height))} -- "
+                           f"{_p((g.width, 0.0))};%")
         if axis.ticks:
-            xs_top = [x for i, x in enumerate(g.in_x) if i not in gin] + ([0.0] if axis.kind == "frame" else [])
-            xs_bot = [x for i, x in enumerate(g.out_x) if i not in gout] + ([0.0] if axis.kind == "frame" else [])
+            frame_like = axis.kind in ("frame",)
+            xs_top = [x for i, x in enumerate(g.in_x) if i not in gin] + ([0.0] if frame_like else [])
+            xs_bot = [x for i, x in enumerate(g.out_x) if i not in gout] + ([0.0] if frame_like else [])
             for x in xs_top:
                 out.append(f"\\draw[line width={lw}pt] {_p((x, g.height - 0.08))} -- "
                            f"{_p((x, g.height + 0.08))};%")
@@ -104,7 +133,14 @@ def braid_content(braid: Braid) -> Tuple[List[str], Geometry, float, float]:
         for d in discs:                       # outermost first
             if d.gap:
                 continue                  # a gap ("...") is a placeholder, not a disc
-            out.append(f"\\draw[color=black!55,line width={lw}pt] {_disc_path(d, y)};%")
+            root_group = d.depth == 0 and not d.is_leaf
+            if root_group and braid.surface == "torus":
+                continue                  # the torus is not a disc: the frame stands for it
+            style = ",dashed" if root_group and braid.surface == "sphere" else ""
+            out.append(f"\\draw[color=black!55,line width={lw}pt{style}] {_disc_path(d, y)};%")
+            if root_group and braid.surface == "sphere":      # complement disc around infinity
+                out.append(f"\\node[anchor=west,inner sep=1pt,font=\\scriptsize] at "
+                           f"{_p((d.right + d.rho + 0.02, y))} {{$\\infty$}};%")
         for d in discs:
             if d.is_leaf and not d.gap:
                 out.append(f"\\fill[color=black!55] {_p((d.left, y))} circle (1.2pt);%")
@@ -120,6 +156,45 @@ def braid_content(braid: Braid) -> Tuple[List[str], Geometry, float, float]:
         if gp.dots:
             pts = " ".join(f"{_p(pt)} circle (1.1pt)" for pt in gp.dots)
             out.append(f"\\fill[color={st.gapcolor}] {pts};%")
+    # torus loops: arrowheads where an a-loop passes through the identified edges, rings for b-loops
+    for s in g.strands:
+        if s.hidden:
+            continue
+        for idx in s.jumps:
+            for seg, tip_at_end in ((s.segments[idx - 1], True), (s.segments[idx], False)):
+                if tip_at_end:
+                    px, py = seg.p3
+                    dxv, dyv = seg.p3[0] - seg.c2[0], seg.p3[1] - seg.c2[1]
+                else:
+                    px, py = seg.p0
+                    dxv, dyv = seg.c1[0] - seg.p0[0], seg.c1[1] - seg.p0[1]
+                ln = math.hypot(dxv, dyv) or 1.0
+                ux, uy = dxv / ln, dyv / ln
+                tip = (px + ux * (0.0 if tip_at_end else 0.17), py + uy * (0.0 if tip_at_end else 0.17))
+                base = (tip[0] - ux * 0.17, tip[1] - uy * 0.17)
+                nx, ny = -uy * 0.055, ux * 0.055
+                out.append(f"\\fill[color={s.color}] {_p(tip)} -- {_p((base[0] + nx, base[1] + ny))} -- "
+                           f"{_p((base[0] - nx, base[1] - ny))} -- cycle;%")
+            if st.looplabels:
+                seg = s.segments[idx - 1]
+                right = seg.p3[0] > g.width / 2
+                lx = seg.p3[0] + (-0.14 if right else 0.14)
+                out.append(f"\\node[anchor={'east' if right else 'west'},inner sep=0.5pt,"
+                           f"font=\\scriptsize,text={s.color}] at {_p((lx, seg.p3[1] - 0.15))} "
+                           f"{{${'a' if right else 'a^{-1}'}$}};%")
+    for kind, strand, mx, my, sign in g.marks:
+        col = g.strands[strand - 1].color
+        r0 = 0.15
+        a0, a1 = (50, 50 + 280) if sign > 0 else (130, 130 - 280)
+        out.append(f"\\draw[color={col},->,line width={lw}pt] {_p((mx + r0 * math.cos(math.radians(a0)), my + r0 * math.sin(math.radians(a0))))} "
+                   f"arc[start angle={a0},end angle={a1},radius={_f(r0)}cm];%")
+        if st.looplabels:
+            out.append(f"\\node[anchor=west,inner sep=0.5pt,font=\\scriptsize,text={col}] at "
+                       f"{_p((mx + 0.2, my + 0.02))} {{${'b' if sign > 0 else 'b^{-1}'}$}};%")
+    if st.surfacelabel and braid.surface != "plane":
+        tag = "S^2" if braid.surface == "sphere" else "T^2"
+        out.append(f"\\node[anchor=south west,inner sep=1pt,font=\\small] at "
+                   f"{_p((g.width + 0.12, g.height + 0.06))} {{${tag}$}};%")
     if axis and axis.front:
         axes()
 
@@ -152,6 +227,8 @@ def braid_content(braid: Braid) -> Tuple[List[str], Geometry, float, float]:
                            f"{_p((x, -0.02 - down))} {{{_label(lab)}}};%")
     if st.sigma:
         for c in g.crossings:
+            if c.generator == 0:                              # crossings made by torus loops
+                continue
             e = "^{-1}" if c.sign < 0 else ""
             out.append(f"\\node[anchor=east,inner sep=1pt,font=\\scriptsize] at "
                        f"{_p((-0.12, c.center[1]))} "

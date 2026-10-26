@@ -42,7 +42,7 @@ def test_every_example_braid_is_exact_and_clean(path):
         with warnings.catch_warnings():
             warnings.simplefilter("error")                      # any geometry warning fails
             g = build_geometry(b)
-        assert count_intersections(g) == len(b.word), f"{path.name}:{line}"
+        assert count_intersections(g) == b.n_projected_crossings, f"{path.name}:{line}"
         pos, ang = max_join_error(g)
         assert pos < 1e-9 and ang < 1e-9, f"{path.name}:{line}"
         # all path points inside the box, strands strictly ordered at the top and bottom

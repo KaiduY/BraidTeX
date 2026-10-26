@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .discs import Disc, disc_layout, root_radius
 from .layout import normalized_positions
-from .model import Braid
+from .model import Braid, LoopEvent
 
 Pt = Tuple[float, float]
 PT_CM = 2.54 / 72.27
@@ -125,7 +125,7 @@ def _merge(ivs: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
 
 
 def _split_runs(segs: List[Bez], cuts: Dict[int, List[Tuple[float, float]]],
-                dots: Dict[int, List[Tuple[float, float]]]):
+                dots: Dict[int, List[Tuple[float, float]]], breaks=frozenset()):
     """Solid runs and dotted runs of one strand.  ``cuts``: crossing gaps (nothing drawn);
     ``dots``: stretches inside a gap region (drawn dotted).  Both keyed by segment index."""
     solid: List[List[Bez]] = []
@@ -140,6 +140,9 @@ def _split_runs(segs: List[Bez], cuts: Dict[int, List[Tuple[float, float]]],
         cur = []
 
     for idx, seg in enumerate(segs):
+        if idx in breaks:                       # seam jump: the path is not connected here
+            flush()
+            kind = ""
         cm, dm = _merge(cuts.get(idx, [])), _merge(dots.get(idx, []))
         pts = sorted({0.0, 1.0} | {x for iv in cm + dm for x in iv})
         for a, b in zip(pts, pts[1:]):
@@ -177,7 +180,7 @@ def _place_gaps(segs: Dict[int, List[Bez]], strands: List["StrandGeom"], gap_set
     close to any strand; rows that cannot be placed are dropped (with a smaller dot pitch as a
     last resort).  Raises no error: if nothing fits, the gap is left empty and a warning issued."""
     gaps = [GapGeom(k, pitch[k], hw[k]) for k in sorted(gap_set)]
-    polys = [polyline(s, 24) for s in strands if s.ident not in gap_set]
+    polys = [pc for s in strands if s.ident not in gap_set for pc in polylines(s, 24)]
     # dotted strands look like dots themselves: keep the rows further away from them
     need = (0.2 if st.gapthrough == "dotted" else 0.115) + st.lw * PT_CM / 2
     m = st.gapdots
@@ -224,10 +227,11 @@ def _place_gaps(segs: Dict[int, List[Bez]], strands: List["StrandGeom"], gap_set
     return gaps, []
 
 
-def _hermite_bez(x0: float, y0: float, x1: float, y1: float, m0: float, m1: float) -> Bez:
+def _hermite_bez(x0: float, y0: float, x1: float, y1: float, m0: float, m1: float,
+                 ease: Optional[float] = None) -> Bez:
     """Cubic curve from (x0,y0) to (x1,y1) (y decreasing) with slopes ``m = dx/d(depth)``
     at both ends.  Equal slopes on both sides of a level make the join G1."""
-    dy = (y1 - y0) * NATURAL_EASE
+    dy = (y1 - y0) * (NATURAL_EASE if ease is None else ease)
     run = abs(dy)
     return Bez((x0, y0), (x0 + m0 * run, y0 + dy), (x1 - m1 * run, y1 - dy), (x1, y1))
 
@@ -292,6 +296,7 @@ class StrandGeom:
     runs: List[List[Bez]] = field(default_factory=list)   # solid pieces (after crossing gaps)
     dotted_runs: List[List[Bez]] = field(default_factory=list)  # pieces drawn dotted (in a gap)
     hidden: bool = False           # a gap slot ("..."): never drawn as a line
+    jumps: List[int] = field(default_factory=list)   # segment indices that start after a seam jump
 
 
 @dataclass
@@ -329,6 +334,8 @@ class Geometry:
     pad_bottom: float = 0.0
     gaps: List[GapGeom] = field(default_factory=list)
     gap_rows: List[float] = field(default_factory=list)
+    seams: List[Tuple[float, int, int]] = field(default_factory=list)   # (y, direction, strand)
+    marks: List[Tuple[str, int, float, float, int]] = field(default_factory=list)  # (kind, strand, x, y, sign)
 
 
 def default_width(n: int, margin: float, spacing: float = 0.9, minspan: float = 1.2) -> float:
@@ -356,8 +363,18 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
     """Build the geometry.  Returns ``(geometry, ok)``; with ``strict`` a failed natural
     attempt returns ``(None, False)`` immediately so the caller can lower the tension."""
     st, n = braid.style, braid.n
-    layers = braid.layers
-    B = max(len(layers), 1)
+    # geometry layers: crossings; an a-loop = two layers (run to the edge / re-enter); b-loop = ring
+    glayers: List[Tuple[str, object]] = []
+    lmap: List[Tuple[int, int]] = []              # logical layer -> (first, last) geometry layer
+    for layer in braid.layers:
+        first = len(glayers) + 1
+        if layer and isinstance(layer[0], LoopEvent):
+            ev = layer[0]
+            glayers += [("A", ev), ("B", ev)] if ev.kind == "a" else [("ring", ev)]
+        else:
+            glayers.append(("x", layer))
+        lmap.append((first, len(glayers)))
+    B = max(len(glayers), 1)
     W = st.width if st.width is not None else default_width(n, st.margin, st.spacing, st.minspan)
     if W - 2 * st.margin <= 0:
         raise ValueError("diagram too small: width <= 2*margin")
@@ -388,7 +405,7 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
     # and output layouts, so the inner braid is drawn undistorted; the other layers do the
     # repositioning.  The parameter stays monotone in [0, 1], hence slots stay ordered.
     inner_layers = {t for r in braid.regions if r.first is not None
-                    for t in range(r.first, (r.last or r.first) + 1)}
+                    for t in range(lmap[r.first - 1][0], lmap[(r.last or r.first) - 1][1] + 1)}
     wts = [0.0 if t in inner_layers else 1.0 for t in range(1, B + 1)]
     if sum(wts) == 0:
         wts = [1.0] * B
@@ -401,12 +418,13 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
 
     # strand identity per slot after t layers
     levels: List[List[int]] = [list(range(1, n + 1))]
-    for layer in layers:
+    for kind, payload in glayers:
         s = list(levels[-1])
-        for c in layer:
-            s[c.slot], s[c.slot + 1] = s[c.slot + 1], s[c.slot]
+        if kind == "x":
+            for c in payload:
+                s[c.slot], s[c.slot + 1] = s[c.slot + 1], s[c.slot]
         levels.append(s)
-    if not layers:
+    if not glayers:
         levels.append(list(levels[0]))
 
     gap_set = braid.gap_ids
@@ -437,6 +455,9 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
                                   for k in range(1, n + 1)}
     xings: List[CrossingGeom] = []
     ok = True
+    jumps: Dict[int, List[int]] = {}
+    seams: List[Tuple[float, int, int]] = []
+    marks: List[Tuple[str, int, float, float, int]] = []
     cuts: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
     dot_iv: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
     clearance = st.gap + st.lw * PT_CM
@@ -450,7 +471,37 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
             else:
                 curves[k] = _band(x_at(t - 1, js), ys[t - 1], x_at(t, je), ys[t])
             segs[k].append(curves[k])
-        if natural and not _layer_ok(curves, levels[t - 1], levels[t], W):
+        kind, payload = glayers[t - 1] if glayers else ("x", ())
+        mv = payload.strand if kind in ("A", "B", "ring") else None
+        ease = NATURAL_EASE if natural else BAND_EASE
+        if kind in ("A", "B"):                   # the looping strand runs to / enters from a frame edge
+            ev = payload
+            dirn = 1 if ev.sign > 0 else -1
+            js = levels[t - 1].index(mv)
+            x_start = knots[mv][t - 1] if natural else x_at(t - 1, js)
+            x_end = knots[mv][t] if natural else x_at(t, js)
+            m0 = slopes[mv][t - 1] if natural else 0.0
+            m1 = slopes[mv][t] if natural else 0.0
+            run = ease * (ys[t - 1] - ys[t])
+            if kind == "A":
+                edge_x = W if dirn > 0 else 0.0
+                dx = abs(edge_x - x_start)
+                me = dirn * max(0.0, min(1.0, 0.9 * (dx - abs(m0) * run) / run))
+                curves[mv] = _hermite_bez(x_start, ys[t - 1], edge_x, ys[t], m0, me, ease)
+            else:
+                edge_x = 0.0 if dirn > 0 else W
+                dx = abs(x_end - edge_x)
+                me = dirn * max(0.0, min(1.0, 0.9 * (dx - abs(m1) * run) / run))
+                curves[mv] = _hermite_bez(edge_x, ys[t - 1], x_end, ys[t], me, m1, ease)
+                jumps.setdefault(mv, []).append(t)          # segment index t starts after the jump
+                seams.append((ys[t - 1], dirn, mv))
+            segs[mv][-1] = curves[mv]
+        elif kind == "ring":
+            ev = payload
+            xm, ym = bez_point(curves[mv], 0.5)
+            marks.append(("b", mv, xm, ym, ev.sign))
+        if natural and kind not in ("A", "B") and \
+                not _layer_ok(curves, levels[t - 1], levels[t], W):
             if strict:
                 return None, False
             ok = False
@@ -461,26 +512,26 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
                         ivs = _near_intervals(curves[k], curves[gid], hw[gid])
                         if ivs:
                             dot_iv.setdefault((k, t), []).extend(ivs)
-        layer = layers[t - 1] if layers else ()
-        for cr in layer:
-            ov, un = curves[cr.over], curves[cr.under]
-            # crossing parameter: x_over(s) - x_under(s) changes sign exactly once in the layer
+
+        def cross(ov: Bez, un: Bez, o_id: int, u_id: int, sign: int, gen: int) -> bool:
+            """Crossing of ``ov`` over ``un`` in this layer: its position and the gap cut in the
+            under-strand.  Returns False if a strict natural attempt must be abandoned."""
             neg0 = bez_point(ov, 0.0)[0] < bez_point(un, 0.0)[0]
             lo, hi = 0.0, 1.0
-            for _ in range(60):
+            for _ in range(60):                       # x_over - x_under changes sign once
                 mid = (lo + hi) / 2
                 if (bez_point(ov, mid)[0] < bez_point(un, mid)[0]) == neg0:
                     lo = mid
                 else:
                     hi = mid
             s_star = (lo + hi) / 2
-            if cr.over in gap_set or cr.under in gap_set:   # passing a gap: nothing to cut
-                xings.append(CrossingGeom(t, bez_point(ov, s_star), cr.over, cr.under, cr.sign,
-                                          cr.generator, (0.0, 0.0), False))
-                continue
+            if o_id in gap_set or u_id in gap_set:    # passing a gap: nothing to cut
+                xings.append(CrossingGeom(t, bez_point(ov, s_star), o_id, u_id, sign, gen,
+                                          (0.0, 0.0), False))
+                return True
             poly = [bez_point(ov, i / 120) for i in range(121)]
 
-            def d(s: float, un=un, poly=poly) -> float:
+            def d(s: float) -> float:
                 return _poly_dist(bez_point(un, s), poly)
 
             def edge(a: float, b: float) -> Tuple[float, bool]:
@@ -498,36 +549,52 @@ def _build(braid: Braid, tau: float, wrap: float, natural: bool, strict: bool):
             s_hi, c2 = edge(1.0, s_star)
             if c1 or c2:
                 if natural and strict:
-                    return None, False
+                    return False
                 warnings.warn(f"layer {t}: the clearance gap of a crossing reaches the end of "
                               f"its layer; increase band/width or decrease gap", stacklevel=2)
-            cuts.setdefault((cr.under, t), []).append((s_lo, s_hi))
-            xings.append(CrossingGeom(t, bez_point(ov, s_star), cr.over, cr.under, cr.sign,
-                                      cr.generator, (s_lo, s_hi), c1 or c2))
+            cuts.setdefault((u_id, t), []).append((s_lo, s_hi))
+            xings.append(CrossingGeom(t, bez_point(ov, s_star), o_id, u_id, sign, gen,
+                                      (s_lo, s_hi), c1 or c2))
+            return True
+
+        if kind == "x":
+            for cr in payload:
+                if not cross(curves[cr.over], curves[cr.under], cr.over, cr.under, cr.sign,
+                             cr.generator):
+                    return None, False
+        elif kind in ("A", "B"):                      # the looping strand passes in front of everything
+            for j in range(1, n + 1):
+                if j == mv:
+                    continue
+                a0 = bez_point(curves[mv], 0.0)[0] < bez_point(curves[j], 0.0)[0]
+                a1 = bez_point(curves[mv], 1.0)[0] < bez_point(curves[j], 1.0)[0]
+                if a0 != a1 and not cross(curves[mv], curves[j], mv, j, 0, 0):
+                    return None, False
 
     strands: List[StrandGeom] = []
     for k in range(1, n + 1):
         px = out_x[braid.permutation[k - 1] - 1]
         segs[k].append(_line((px, ys[B]), (px, 0.0)))
         if k in gap_set:
-            strands.append(StrandGeom(k, st.gapcolor, segs[k], [], [], True))
+            strands.append(StrandGeom(k, st.gapcolor, segs[k], [], [], True, list(jumps.get(k, []))))
             continue
         kc = {idx: v for (kk, idx), v in cuts.items() if kk == k}
         kd = {idx: v for (kk, idx), v in dot_iv.items() if kk == k}
-        solid, dotted = _split_runs(segs[k], kc, kd)
-        strands.append(StrandGeom(k, braid.strand_color(k), segs[k], solid, dotted, False))
+        solid, dotted = _split_runs(segs[k], kc, kd, frozenset(jumps.get(k, [])))
+        strands.append(StrandGeom(k, braid.strand_color(k), segs[k], solid, dotted, False,
+                                  list(jumps.get(k, []))))
     gap_geoms: List[GapGeom] = []
     gap_rows: List[float] = []
     if gap_set:
         gap_geoms, gap_rows = _place_gaps(segs, strands, gap_set, pitch, hw, H, st)
 
-    regions, rok = _regions(braid, levels, x_at, ys, H, B, st, natural, tau, wrap, bh, segs)
+    regions, rok = _regions(braid, levels, x_at, ys, H, B, st, natural, tau, wrap, bh, segs, lmap)
     if natural and not rok:
         if strict:
             return None, False
         ok = False
     return Geometry(W, H, in_x, out_x, strands, xings, ys, B, regions, d_in, d_out,
-                    pad_top, pad_bot, gap_geoms, gap_rows), ok
+                    pad_top, pad_bot, gap_geoms, gap_rows, seams, marks), ok
 
 
 def _layer_ok(curves: Dict[int, Bez], prev: List[int], nxt: List[int], width: float) -> bool:
@@ -562,7 +629,7 @@ def _layer_ok(curves: Dict[int, Bez], prev: List[int], nxt: List[int], width: fl
 
 def _regions(braid: Braid, levels, x_at, ys, H: float, B: int, st, natural: bool = False,
              tau: float = 0.0, wrap: float = 0.0, bh: float = 1.0,
-             segs=None) -> Tuple[List[RegionGeom], bool]:
+             segs=None, lmap=None) -> Tuple[List[RegionGeom], bool]:
     out: List[RegionGeom] = []
     ok = True
     if st.compose == "none":
@@ -602,8 +669,10 @@ def _regions(braid: Braid, levels, x_at, ys, H: float, B: int, st, natural: bool
         if extent == "full" or r.first is None:
             i0, i1 = 0, B + 1
         else:
-            i0 = 0 if r.first == 1 else r.first
-            i1 = B + 1 if r.last == B else r.last
+            gf = lmap[r.first - 1][0] if lmap else r.first
+            gl = lmap[r.last - 1][1] if lmap else r.last
+            i0 = 0 if gf == 1 else gf
+            i1 = B + 1 if gl == B else gl
         FL, FR = guide(-1), guide(+1)
         if natural and segs is not None:      # the markings must stay clear of the ribbon strands
             for t in range(1, B + 1):
@@ -644,13 +713,28 @@ def build_geometry(braid: Braid) -> Geometry:
 
 # --------------------------------------------------------------- analysis
 def polyline(strand: StrandGeom, per_seg: int = 24) -> List[Pt]:
+    """Samples of the whole path; sample ``idx*per_seg + i`` is at parameter ``i/per_seg`` of
+    segment ``idx`` (so equal indices of different strands are at equal heights).  A seam jump
+    is a discontinuity between two consecutive samples (see ``strand.jumps``)."""
     pts: List[Pt] = []
     for sg in strand.segments:
-        for i in range(per_seg + 1):
-            if pts and i == 0:
-                continue
+        for i in range(per_seg):
             pts.append(bez_point(sg, i / per_seg))
+    pts.append(strand.segments[-1].p3)
     return pts
+
+
+def polylines(strand: StrandGeom, per_seg: int = 24) -> List[List[Pt]]:
+    """The path as connected polylines (split at seam jumps)."""
+    pieces: List[List[Pt]] = [[]]
+    for idx, sg in enumerate(strand.segments):
+        if idx in strand.jumps:
+            pieces[-1].append(strand.segments[idx - 1].p3)
+            pieces.append([])
+        for i in range(per_seg):
+            pieces[-1].append(bez_point(sg, i / per_seg))
+    pieces[-1].append(strand.segments[-1].p3)
+    return pieces
 
 
 def count_intersections(geom: Geometry, per_seg: int = 24) -> int:
@@ -662,11 +746,14 @@ def count_intersections(geom: Geometry, per_seg: int = 24) -> int:
     at a crossing vertex are skipped; mere touching would not be counted).
     """
     polys = [polyline(s, per_seg) for s in geom.strands]
+    jump = [{idx * per_seg for idx in s.jumps} for s in geom.strands]
     total = 0
     for a in range(len(polys)):
         for b in range(a + 1, len(polys)):
             last = 0
-            for p, q in zip(polys[a], polys[b]):
+            for i, (p, q) in enumerate(zip(polys[a], polys[b])):
+                if i in jump[a] or i in jump[b]:        # a seam jump is not a crossing
+                    last = 0
                 d = p[0] - q[0]
                 if abs(d) < 1e-9:
                     continue
@@ -682,7 +769,9 @@ def max_join_error(geom: Geometry) -> Tuple[float, float]:
     the complete (uncut) strand paths."""
     pos = ang = 0.0
     for s in geom.strands:
-        for a, b in zip(s.segments, s.segments[1:]):
+        for idx, (a, b) in enumerate(zip(s.segments, s.segments[1:]), 1):
+            if idx in s.jumps:
+                continue
             pos = max(pos, math.dist(a.p3, b.p0))
             ta = (a.p3[0] - a.c2[0], a.p3[1] - a.c2[1])
             tb = (b.c1[0] - b.p0[0], b.c1[1] - b.p0[1])

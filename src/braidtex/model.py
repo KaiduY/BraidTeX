@@ -20,13 +20,66 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .config import GAP, ConfigLike, Node, collapse, parse_config, replace_leaf, unlabeled
 from .errors import BraidValidationError, IncompatibleBoundaryError
 from .style import PALETTE, Style, check_color
 
 FORMAT_VERSION = 1
+SURFACES = ("plane", "sphere", "torus")
+
+
+@dataclass(frozen=True)
+class Loop:
+    """Torus generator: the strand in position ``pos`` goes once round a cycle of the torus.
+
+    ``a``: round the horizontal cycle (it passes in front of all other strands, leaves the
+    diagram at one side and re-enters at the other).  ``b``: round the depth cycle (front ->
+    back -> front, drawn as a ring on the strand).  ``sign = -1``: the inverse loop."""
+    kind: str
+    pos: int
+    sign: int = 1
+
+    def __str__(self) -> str:
+        return ("-" if self.sign < 0 else "") + f"{self.kind}{self.pos}"
+
+    def __repr__(self) -> str:
+        return f"Loop('{self}')"
+
+
+@dataclass(frozen=True)
+class LoopEvent:
+    """A loop generator inside the layer structure (one per layer)."""
+    kind: str
+    sign: int
+    slot: int             # 0-based position
+    strand: int           # identity of the strand that loops
+    level: int            # 1-based position in the word
+    layer: int
+
+
+Generator = Union[int, Loop]
+
+
+def parse_generator(g) -> Generator:
+    """``3`` / ``"-2"`` -> sigma; ``"a1"`` / ``"-b2"`` / ``Loop`` -> torus loop."""
+    if isinstance(g, Loop):
+        return g
+    if isinstance(g, str):
+        t = g.strip()
+        sign = -1 if t.startswith("-") else 1
+        body = t.lstrip("+-")
+        if body.isdigit():
+            return sign * int(body)
+        if len(body) > 1 and body[0] in "ab" and body[1:].isdigit():
+            return Loop(body[0], int(body[1:]), sign)
+        raise BraidValidationError(
+            f"bad generator {g!r}: use an integer (sigma), or a<i> / b<i> (torus loops), "
+            f"optionally with a leading '-'")
+    if isinstance(g, bool) or int(g) != g:
+        raise BraidValidationError(f"generator {g!r} is not an integer")
+    return int(g)
 
 
 @dataclass(frozen=True)
@@ -40,13 +93,14 @@ class Point:
 @dataclass(frozen=True)
 class Axis:
     """Optional horizontal reference axes through the endpoints."""
-    kind: str = "h"       # 'h' = two horizontal axes, 'frame' = plus x=0 arrow and dotted right edge
+    kind: str = "h"       # 'h' = two horizontal axes, 'frame' = plus x=0 arrow and dotted right edge;
+                          # 'torus' / 'sphere' = surface frames; 'none' = draw nothing
     front: bool = False
     ticks: bool = True
 
     def __post_init__(self):
-        if self.kind not in ("h", "frame"):
-            raise BraidValidationError("axis kind must be 'h' or 'frame'")
+        if self.kind not in ("h", "frame", "torus", "sphere", "none"):
+            raise BraidValidationError("axis kind must be h|frame|torus|sphere|none")
 
 
 @dataclass(frozen=True)
@@ -125,8 +179,16 @@ class Braid:
                  in_labels: Optional[Sequence[Optional[str]]] = None,
                  out_labels: Optional[Sequence[Optional[str]]] = None,
                  groups: Optional[Sequence[int]] = None,
-                 regions: Iterable[Region] = ()):
-        self.word: Tuple[int, ...] = tuple(self._check_int(g) for g in word)
+                 regions: Iterable[Region] = (), surface: str = "plane"):
+        if surface not in SURFACES:
+            raise BraidValidationError(f"surface must be one of {', '.join(SURFACES)}, got {surface!r}")
+        self.surface: str = surface
+        self.word: Tuple[Generator, ...] = tuple(parse_generator(g) for g in word)
+        if surface != "torus" and any(isinstance(g, Loop) for g in self.word):
+            bad = next(g for g in self.word if isinstance(g, Loop))
+            raise BraidValidationError(
+                f"loop generator {bad} (torus) is not available on the {surface}: the torus loops "
+                f"a_i, b_i exist only with surface=torus")
         self.groups: Optional[Tuple[int, ...]] = None if groups is None else tuple(groups)
         src, tgt = _as_node(source), _as_node(target)
 
@@ -142,7 +204,7 @@ class Braid:
         if arities:
             self.n = next(iter(arities.values()))
         elif self.word:
-            self.n = max(abs(g) for g in self.word) + 1
+            self.n = max(g.pos if isinstance(g, Loop) else abs(g) + 1 for g in self.word)
         else:
             raise BraidValidationError(
                 "cannot infer the number of strands: give an input/output configuration, "
@@ -164,6 +226,11 @@ class Braid:
             tgt = src.relabel([sl[s - 1] for s in self._slots])
         self.source, self.target = src, tgt
         self._check_boundaries()
+        for ev in self.loops:
+            if ev.strand in self.gap_ids:
+                raise BraidValidationError(
+                    f"loop {'-' if ev.sign < 0 else ''}{ev.kind}{ev.slot + 1}: that position is a "
+                    f"gap ('...'), not a strand")
 
         # ---- decorations ---------------------------------------------
         self.colors: Dict[int, str] = {}
@@ -199,14 +266,14 @@ class Braid:
             raise BraidValidationError(f"outpos needs {self.n} values")
 
     # ------------------------------------------------------------ validation
-    @staticmethod
-    def _check_int(g) -> int:
-        if isinstance(g, bool) or int(g) != g:
-            raise BraidValidationError(f"generator {g!r} is not an integer")
-        return int(g)
-
     def _validate_word(self) -> None:
         for pos, g in enumerate(self.word, 1):
+            if isinstance(g, Loop):
+                if not (1 <= g.pos <= self.n):
+                    raise BraidValidationError(
+                        f"generator #{pos} = {g} is invalid for a braid on {self.n} strand(s): "
+                        f"loops need 1 <= position <= {self.n}")
+                continue
             if g == 0:
                 raise BraidValidationError(f"generator #{pos} is 0; generators are +-1..+-{self.n - 1}")
             if abs(g) > self.n - 1:
@@ -235,9 +302,17 @@ class Braid:
                 f"{len(self.word)}")
         slots = list(range(1, self.n + 1))
         crossings: List[Crossing] = []
-        layers: List[Tuple[Crossing, ...]] = []
+        layers: List[Tuple[object, ...]] = []
         pos = 0
         for li, size in enumerate(groups, 1):
+            if any(isinstance(t, Loop) for t in self.word[pos:pos + size]):
+                if size != 1:
+                    raise BraidValidationError(
+                        f"layer {li}: a loop generator (a/b) must be alone in its layer")
+                t = self.word[pos]
+                pos += 1
+                layers.append((LoopEvent(t.kind, t.sign, t.pos - 1, slots[t.pos - 1], pos, li),))
+                continue
             seen = set()
             layer: List[Crossing] = []
             for _ in range(size):
@@ -278,6 +353,17 @@ class Braid:
         return frozenset(k for k, l in enumerate(self.source.labels(), 1) if l == GAP)
 
     @property
+    def loops(self) -> List[LoopEvent]:
+        """Torus loop generators of the word, in order."""
+        return [e for layer in self.layers for e in layer if isinstance(e, LoopEvent)]
+
+    @property
+    def n_projected_crossings(self) -> int:
+        """Crossings in the diagram: sigma crossings plus, for every ``a`` loop, one crossing
+        with each of the other strands (``b`` loops cross nothing)."""
+        return len(self.crossings) + sum(self.n - 1 for e in self.loops if e.kind == "a")
+
+    @property
     def permutation(self) -> Tuple[int, ...]:
         """``p[k-1]`` = output slot (1-based) reached by strand ``k``."""
         p = [0] * self.n
@@ -294,6 +380,8 @@ class Braid:
         """Strand identities per slot after the first ``t`` generators."""
         slots = list(range(1, self.n + 1))
         for g in self.word[:t]:
+            if isinstance(g, Loop):
+                continue
             i = abs(g) - 1
             slots[i], slots[i + 1] = slots[i + 1], slots[i]
         return slots
@@ -328,8 +416,12 @@ class Braid:
                 "cannot compose: output configuration "
                 f"[{self.target.to_string()}] of the first braid differs from the input "
                 f"configuration [{other.source.to_string()}] of the second")
+        if self.surface != other.surface:
+            raise IncompatibleBoundaryError(
+                f"cannot compose braids on different surfaces ({self.surface} / {other.surface})")
         return Braid(self.word + other.word, self.source, other.target,
-                     colors=self.colors, notes=self.notes, axis=self.axis, style=self.style)
+                     colors=self.colors, notes=self.notes, axis=self.axis, style=self.style,
+                     surface=self.surface)
 
     def compose_at(self, k: int, inner: "Braid", at: Optional[str] = None) -> "Braid":
         """Replace strand ``k`` of this braid by the braid ``inner`` (operadic ``∘_k``).
@@ -351,6 +443,10 @@ class Braid:
         m = inner.n
         if m < 1:
             raise BraidValidationError("the inner braid needs at least one strand")
+        if inner.surface != "plane":
+            raise BraidValidationError(
+                "the inner braid must be a planar braid: configurations of a surface form a right "
+                "module over the little-discs operad (planar discs are inserted into points)")
         at = at if at is not None else self.style.at
         nl = len(self.layers)
         pos = 0 if at == "top" else nl if at == "bottom" else int(at)
@@ -363,8 +459,17 @@ class Braid:
         outer_layers: List[List[int]] = []
         history = [list(slots)]
         for layer in self.layers:
+            if layer and isinstance(layer[0], LoopEvent):
+                ev = layer[0]
+                if ev.strand == k:
+                    raise BraidValidationError(
+                        "cannot substitute into a strand that makes a torus loop (a/b): "
+                        "loops of a whole ribbon are not supported yet")
+                outer_layers.append([Loop(ev.kind, sum(w[x] for x in slots[:ev.slot]) + 1, ev.sign)])
+                history.append(list(slots))
+                continue
             s = list(slots)
-            gens: List[int] = []
+            gens: List[Generator] = []
             for c in layer:
                 i = c.slot
                 u, v = w[s[i]], w[s[i + 1]]
@@ -432,7 +537,7 @@ class Braid:
             regions.append(Region(tuple(range(k, k + m)), first, last))
         return Braid(word, src, tgt, colors=colors, notes=notes, points=points,
                      axis=self.axis, style=self.style, in_labels=in_l, out_labels=out_l,
-                     groups=groups, regions=regions)
+                     groups=groups, regions=regions, surface=self.surface)
 
     def replace(self, **kw) -> "Braid":
         """Copy with decorations/style changed (semantics preserved)."""
@@ -440,7 +545,7 @@ class Braid:
                  colors=self.colors, notes=self.notes, points=self.points,
                  axis=self.axis, style=self.style,
                  in_labels=self.in_labels, out_labels=self.out_labels,
-                 groups=self.groups, regions=self.regions)
+                 groups=self.groups, regions=self.regions, surface=self.surface)
         d.update(kw)
         return Braid(**d)
 
@@ -448,7 +553,7 @@ class Braid:
     def to_dict(self) -> dict:
         d = {
             "version": FORMAT_VERSION,
-            "word": list(self.word),
+            "word": [str(g) if isinstance(g, Loop) else g for g in self.word],
             "source": self.source.to_json(),
             "target": self.target.to_json(),
             "colors": {str(k): v for k, v in sorted(self.colors.items())},
@@ -462,6 +567,8 @@ class Braid:
         }
         if self.n == 0:
             d["n"] = 0
+        if self.surface != "plane":
+            d["surface"] = self.surface
         if self.groups is not None and any(g != 1 for g in self.groups):
             d["groups"] = list(self.groups)
         if self.regions:
@@ -473,7 +580,7 @@ class Braid:
         if d.get("version", FORMAT_VERSION) != FORMAT_VERSION:
             raise BraidValidationError(f"unsupported spec version {d.get('version')!r}")
         known = {"version", "word", "source", "target", "colors", "notes", "points",
-                 "axis", "in_labels", "out_labels", "style", "n", "groups", "regions"}
+                 "axis", "in_labels", "out_labels", "style", "n", "groups", "regions", "surface"}
         extra = set(d) - known
         if extra:
             raise BraidValidationError(f"unknown keys in braid spec: {sorted(extra)}")
@@ -493,7 +600,8 @@ class Braid:
             style=Style.from_dict(d["style"]) if "style" in d else Style(),
             in_labels=d.get("in_labels"), out_labels=d.get("out_labels"),
             groups=d.get("groups"),
-            regions=[Region(tuple(r[0]), r[1], r[2]) for r in d.get("regions", [])])
+            regions=[Region(tuple(r[0]), r[1], r[2]) for r in d.get("regions", [])],
+            surface=d.get("surface", "plane"))
 
     def to_json(self, **kw) -> str:
         return json.dumps(self.to_dict(), **kw)
